@@ -88,3 +88,52 @@ async function apiRequest(endpoint, options = {}) {
     throw err;
   }
 }
+
+/**
+ * Downsample and optimize an image file client-side before upload.
+ */
+function downsampleImageFile(file, maxWidth = 1280, maxHeight = 1280) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type.startsWith("image/")) {
+      return reject(new Error("Selected file is not an image"));
+    }
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error("Canvas conversion failed"));
+          },
+          "image/jpeg",
+          0.85
+        );
+      };
+      img.onerror = () => reject(new Error("Could not decode image file"));
+    };
+    reader.onerror = () => reject(new Error("Failed to read image file"));
+  });
+}
+

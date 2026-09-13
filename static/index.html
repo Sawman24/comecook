@@ -444,22 +444,56 @@
       </div>
       <form onsubmit="handleProfileUpdateSubmit(event)">
         <div class="modal-body">
+          <!-- Profile Picture Upload & Preview Section -->
+          <div class="form-group avatar-edit-section">
+            <label>Profile Picture</label>
+            <div class="avatar-edit-container">
+              <div class="avatar-edit-preview-wrap" onclick="document.getElementById('profile-avatar-file-input').click()" title="Click to upload profile photo">
+                <img id="profile-avatar-preview" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100" class="avatar-edit-img" alt="Profile avatar" />
+                <div class="avatar-upload-overlay">
+                  <span>📷</span>
+                </div>
+              </div>
+              <div class="avatar-edit-controls">
+                <input type="file" id="profile-avatar-file-input" accept="image/png,image/jpeg,image/webp,image/gif" style="display: none;" onchange="handleProfileAvatarFileSelect(this)" />
+                <div class="avatar-action-btns">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('profile-avatar-file-input').click()">
+                    <span>📁</span> Upload Photo
+                  </button>
+                  <button type="button" class="btn btn-outline btn-sm text-danger" id="profile-avatar-remove-btn" onclick="removeProfileAvatar()" style="display: none;">
+                    Remove Photo
+                  </button>
+                </div>
+                <div class="avatar-upload-hint">Upload JPG, PNG, WEBP, or GIF</div>
+                <div id="profile-avatar-uploading-spinner" class="avatar-uploading-indicator" style="display: none;">
+                  <span class="spinner-small"></span> Uploading photo...
+                </div>
+              </div>
+            </div>
+
+            <!-- Optional Link Input Toggle for users who prefer pasting a URL -->
+            <div class="avatar-url-toggle-wrap">
+              <button type="button" class="btn-link-toggle" onclick="toggleAvatarUrlInput()">
+                <span id="avatar-url-toggle-text">Or paste image URL ▼</span>
+              </button>
+              <div id="avatar-url-input-container" style="display: none; margin-top: 0.5rem;">
+                <input type="url" id="profile-avatar-input" class="form-control" placeholder="https://..." oninput="handleProfileAvatarUrlInput(this.value)" />
+              </div>
+            </div>
+          </div>
+
           <div class="form-group">
             <label>Display Name</label>
             <input type="text" id="profile-display-input" class="form-control" required />
           </div>
           <div class="form-group">
-            <label>Avatar Image URL</label>
-            <input type="url" id="profile-avatar-input" class="form-control" placeholder="https://..." />
-          </div>
-          <div class="form-group">
             <label>Culinary Bio</label>
-            <textarea id="profile-bio-input" class="form-control" rows="3"></textarea>
+            <textarea id="profile-bio-input" class="form-control" rows="3" placeholder="Tell other chefs about your cooking style, specialties, and favorite ingredients..."></textarea>
           </div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="closeEditProfileModal()">Cancel</button>
-          <button type="submit" class="btn btn-primary">Update Profile</button>
+          <button type="submit" class="btn btn-primary" id="profile-save-btn">Update Profile</button>
         </div>
       </form>
     </div>

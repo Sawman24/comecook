@@ -182,5 +182,46 @@ class E2EComprehensiveTestCase(unittest.TestCase):
         check_res = self.client.get("/api/planner?start_date=2026-12-01&end_date=2026-12-07")
         self.assertEqual(len(check_res.get_json()["planner"]), 0)
 
+    def test_06_profile_update_with_uploaded_avatar(self):
+        """Verify user can upload an image and save it as their profile avatar."""
+        self.client.post("/api/auth/login", json={
+            "username": "headchef",
+            "password": "ChefPass123!"
+        })
+
+        # 1. Upload avatar photo
+        img = Image.new("RGB", (400, 400), color=(100, 200, 150))
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format="JPEG")
+        img_byte_arr.seek(0)
+
+        upload_res = self.client.post("/api/upload", data={
+            "image": (img_byte_arr, "profile_pic.jpg")
+        }, content_type="multipart/form-data")
+        self.assertEqual(upload_res.status_code, 200)
+        uploaded_url = upload_res.get_json()["url"]
+        self.assertTrue(uploaded_url.startswith("/uploads/"))
+
+        # 2. Update profile with uploaded avatar
+        update_res = self.client.put("/api/users/profile", json={
+            "display_name": "Chef Head Master",
+            "avatar_url": uploaded_url,
+            "bio": "Passionate about artisanal bread, homemade pasta, and farm-to-table dining."
+        })
+        self.assertEqual(update_res.status_code, 200)
+
+        # 3. Verify user profile returns updated avatar and info
+        profile_res = self.client.get("/api/users/headchef")
+        self.assertEqual(profile_res.status_code, 200)
+        user_info = profile_res.get_json()["user"]
+        self.assertEqual(user_info["display_name"], "Chef Head Master")
+        self.assertEqual(user_info["avatar_url"], uploaded_url)
+        self.assertEqual(user_info["bio"], "Passionate about artisanal bread, homemade pasta, and farm-to-table dining.")
+
+        # 4. Verify uploaded image is served via static route
+        served_img_res = self.client.get(uploaded_url)
+        self.assertEqual(served_img_res.status_code, 200)
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -270,14 +270,35 @@ async function openUserProfile(username) {
    EDIT PROFILE MODAL
    ============================================================================== */
 
+const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100";
+let isAvatarUploading = false;
+
 function openEditProfileModal() {
   if (!currentUser) return;
   const modal = document.getElementById("profile-modal");
   if (!modal) return;
 
+  const currentAvatar = currentUser.avatar_url || "";
   document.getElementById("profile-display-input").value = currentUser.display_name || "";
-  document.getElementById("profile-avatar-input").value = currentUser.avatar_url || "";
+  document.getElementById("profile-avatar-input").value = currentAvatar;
+  document.getElementById("profile-avatar-preview").src = currentAvatar || DEFAULT_AVATAR;
   document.getElementById("profile-bio-input").value = currentUser.bio || "";
+
+  const removeBtn = document.getElementById("profile-avatar-remove-btn");
+  if (removeBtn) {
+    removeBtn.style.display = currentAvatar ? "inline-block" : "none";
+  }
+
+  const spinner = document.getElementById("profile-avatar-uploading-spinner");
+  if (spinner) spinner.style.display = "none";
+
+  const urlContainer = document.getElementById("avatar-url-input-container");
+  if (urlContainer) urlContainer.style.display = "none";
+  const urlToggleText = document.getElementById("avatar-url-toggle-text");
+  if (urlToggleText) urlToggleText.textContent = "Or paste image URL ▼";
+
+  const fileInput = document.getElementById("profile-avatar-file-input");
+  if (fileInput) fileInput.value = "";
 
   modal.classList.add("show");
 }
@@ -287,8 +308,101 @@ function closeEditProfileModal() {
   if (modal) modal.classList.remove("show");
 }
 
+function toggleAvatarUrlInput() {
+  const container = document.getElementById("avatar-url-input-container");
+  const toggleText = document.getElementById("avatar-url-toggle-text");
+  if (!container) return;
+
+  const isHidden = container.style.display === "none";
+  container.style.display = isHidden ? "block" : "none";
+  if (toggleText) {
+    toggleText.textContent = isHidden ? "Hide image URL input ▲" : "Or paste image URL ▼";
+  }
+}
+
+function handleProfileAvatarUrlInput(val) {
+  const trimmed = (val || "").trim();
+  const preview = document.getElementById("profile-avatar-preview");
+  const removeBtn = document.getElementById("profile-avatar-remove-btn");
+
+  if (preview) {
+    preview.src = trimmed || DEFAULT_AVATAR;
+  }
+  if (removeBtn) {
+    removeBtn.style.display = trimmed ? "inline-block" : "none";
+  }
+}
+
+function removeProfileAvatar() {
+  const avatarInput = document.getElementById("profile-avatar-input");
+  const preview = document.getElementById("profile-avatar-preview");
+  const removeBtn = document.getElementById("profile-avatar-remove-btn");
+  const fileInput = document.getElementById("profile-avatar-file-input");
+
+  if (avatarInput) avatarInput.value = "";
+  if (fileInput) fileInput.value = "";
+  if (preview) preview.src = DEFAULT_AVATAR;
+  if (removeBtn) removeBtn.style.display = "none";
+
+  showToast("Photo removed. Click Update Profile to save changes.", "info");
+}
+
+async function handleProfileAvatarFileSelect(input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  const preview = document.getElementById("profile-avatar-preview");
+  const spinner = document.getElementById("profile-avatar-uploading-spinner");
+  const removeBtn = document.getElementById("profile-avatar-remove-btn");
+  const saveBtn = document.getElementById("profile-save-btn");
+  const avatarInput = document.getElementById("profile-avatar-input");
+
+  try {
+    isAvatarUploading = true;
+    if (saveBtn) saveBtn.disabled = true;
+    if (spinner) spinner.style.display = "flex";
+
+    // Show instant local preview
+    if (preview) {
+      preview.src = URL.createObjectURL(file);
+    }
+
+    showToast("Processing and optimizing profile photo...", "info", 1500);
+
+    // Downsample client-side to max 800x800 JPEG for fast network upload
+    const blob = await downsampleImageFile(file, 800, 800);
+
+    const formData = new FormData();
+    formData.append("image", blob, "avatar.jpg");
+
+    const res = await apiRequest("/api/upload", {
+      method: "POST",
+      body: formData
+    });
+
+    if (res && res.url) {
+      if (avatarInput) avatarInput.value = res.url;
+      if (preview) preview.src = res.url;
+      if (removeBtn) removeBtn.style.display = "inline-block";
+      showToast("Profile photo uploaded! Click Update Profile to save.", "success");
+    }
+  } catch (err) {
+    showToast("Photo upload failed: " + err.message, "error");
+    if (preview) preview.src = currentUser.avatar_url || DEFAULT_AVATAR;
+  } finally {
+    isAvatarUploading = false;
+    if (spinner) spinner.style.display = "none";
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
 async function handleProfileUpdateSubmit(e) {
   e.preventDefault();
+  if (isAvatarUploading) {
+    showToast("Please wait for the photo to finish uploading...", "info");
+    return;
+  }
+
   const display_name = document.getElementById("profile-display-input").value.trim();
   const avatar_url = document.getElementById("profile-avatar-input").value.trim();
   const bio = document.getElementById("profile-bio-input").value.trim();
@@ -298,7 +412,7 @@ async function handleProfileUpdateSubmit(e) {
       method: "PUT",
       body: JSON.stringify({ display_name, avatar_url, bio })
     });
-    showToast(data.message, "success");
+    showToast(data.message || "Profile updated successfully!", "success");
     closeEditProfileModal();
     await checkAuthStatus();
     openUserProfile(currentUser.username);
@@ -306,6 +420,7 @@ async function handleProfileUpdateSubmit(e) {
     showToast("Error updating profile: " + err.message, "error");
   }
 }
+
 
 async function adminRemoveUserFromProfile(userId, username) {
   if (!confirm(`Are you sure you want to PERMANENTLY REMOVE @${username}?\n\nThis will immediately delete their account, profile, recipes, posts, and comments.`)) {
