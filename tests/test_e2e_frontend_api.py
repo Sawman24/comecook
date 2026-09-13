@@ -67,7 +67,7 @@ class E2EComprehensiveTestCase(unittest.TestCase):
         data = res.get_json()
         self.assertTrue(data["success"])
         self.assertTrue(data["url"].startswith("/uploads/"))
-        self.assertTrue(data["filename"].endswith(".jpg"))
+        self.assertTrue(data["filename"].endswith((".webp", ".jpg")))
 
         # Verify the saved image was resized
         from app import UPLOAD_FOLDER
@@ -76,7 +76,7 @@ class E2EComprehensiveTestCase(unittest.TestCase):
         with Image.open(saved_img_path) as saved_img:
             self.assertLessEqual(saved_img.width, 1280)
             self.assertLessEqual(saved_img.height, 1280)
-            self.assertEqual(saved_img.format, "JPEG")
+            self.assertIn(saved_img.format, ("WEBP", "JPEG"))
 
     def test_03_scraper_json_ld_fallback(self):
         """Verify fallback JSON-LD parser extracts structured recipe data from HTML."""

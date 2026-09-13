@@ -4,6 +4,7 @@ import json
 import re
 import time
 import threading
+import gzip
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, g, send_from_directory, make_response
 from PIL import Image
@@ -40,6 +41,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 init_db()
 seed_data_if_empty()
 
+def sanitize_fts_query(query: str) -> str:
+    """Sanitize user search query for SQLite FTS5 MATCH operator with tokenized prefix matching."""
+    if not query:
+        return ""
+    cleaned = re.sub(r'[\"\*\:\^\{\}\(\)\[\]\+\-\~]', ' ', query)
+    tokens = [t.strip() for t in cleaned.split() if t.strip()]
+    if not tokens:
+        return ""
+    return " ".join(f'"{t}"*' for t in tokens)
+
 def is_request_secure() -> bool:
     """Check if the current request is HTTPS or running over a secure transport."""
     return (
@@ -68,16 +79,40 @@ def get_request_base_url() -> str:
 
 
 @app.after_request
-def apply_security_headers(response):
-    """Enforce industry-standard encryption, transport, and browser security headers."""
+def apply_security_and_performance_headers(response):
+    """Enforce browser security headers, static asset caching, and dynamic Gzip compression."""
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    if request.path.startswith("/js/") or request.path.startswith("/css/") or request.path == "/":
+
+    # 1. Performance Caching Policy
+    if request.path.startswith("/css/") or request.path.startswith("/js/") or request.path.startswith("/uploads/"):
+        if request.args.get("v") or request.path.startswith("/uploads/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=86400, must-revalidate"
+    elif request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    elif request.path == "/" or request.path.endswith(".html"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
+
     if is_request_secure():
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+
+    # 2. HTTP Gzip Compression (reduces wire payload sizes by 70-85%)
+    accept_encoding = request.headers.get("Accept-Encoding", "").lower()
+    if "gzip" in accept_encoding and response.status_code in (200, 201, 204) and not response.direct_passthrough:
+        c_type = response.headers.get("Content-Type", "").lower()
+        if any(t in c_type for t in ("application/json", "text/html", "text/css", "application/javascript", "text/javascript", "text/plain", "image/svg+xml")):
+            data = response.get_data()
+            if len(data) >= 500:
+                compressed = gzip.compress(data, compresslevel=6)
+                response.set_data(compressed)
+                response.headers["Content-Encoding"] = "gzip"
+                response.headers["Content-Length"] = len(compressed)
+                response.headers["Vary"] = "Accept-Encoding"
+
     return response
 
 
@@ -1433,19 +1468,39 @@ def global_search():
     search_param = f"%{query}%"
     clean_user_query = query.lstrip("@").strip()
     user_search_param = f"%{clean_user_query}%"
+    fts_q = sanitize_fts_query(query)
 
-    # 1. Search Recipes
-    cursor.execute("""
-        SELECT r.id, r.title, r.description, r.image_url, r.cuisine, r.difficulty, r.prep_time_min, r.cook_time_min,
-               u.username, u.display_name
-        FROM recipes r
-        JOIN users u ON r.user_id = u.id
-        WHERE (r.is_public = 1 OR (r.user_id = ?))
-          AND (r.title LIKE ? OR r.description LIKE ? OR r.cuisine LIKE ? OR r.ingredients_json LIKE ?)
-        ORDER BY r.id DESC
-        LIMIT 5;
-    """, (current_user["id"] if current_user else -1, search_param, search_param, search_param, search_param))
-    recipes = [dict(row) for row in cursor.fetchall()]
+    # 1. Search Recipes with FTS5 BM25 ranking (fallback to LIKE)
+    recipes = []
+    if fts_q:
+        try:
+            cursor.execute("""
+                SELECT r.id, r.title, r.description, r.image_url, r.cuisine, r.difficulty, r.prep_time_min, r.cook_time_min,
+                       u.username, u.display_name
+                FROM recipes_fts f
+                JOIN recipes r ON f.rowid = r.id
+                JOIN users u ON r.user_id = u.id
+                WHERE (r.is_public = 1 OR (r.user_id = ?))
+                  AND recipes_fts MATCH ?
+                ORDER BY f.rank
+                LIMIT 5;
+            """, (current_user["id"] if current_user else -1, fts_q))
+            recipes = [dict(row) for row in cursor.fetchall()]
+        except Exception:
+            recipes = []
+
+    if not recipes:
+        cursor.execute("""
+            SELECT r.id, r.title, r.description, r.image_url, r.cuisine, r.difficulty, r.prep_time_min, r.cook_time_min,
+                   u.username, u.display_name
+            FROM recipes r
+            JOIN users u ON r.user_id = u.id
+            WHERE (r.is_public = 1 OR (r.user_id = ?))
+              AND (r.title LIKE ? OR r.description LIKE ? OR r.cuisine LIKE ? OR r.ingredients_json LIKE ?)
+            ORDER BY r.id DESC
+            LIMIT 5;
+        """, (current_user["id"] if current_user else -1, search_param, search_param, search_param, search_param))
+        recipes = [dict(row) for row in cursor.fetchall()]
 
     # 2. Search Chefs / Users (Handles @username, display name, and bio)
     cursor.execute("""
@@ -1481,22 +1536,45 @@ def global_search():
     """, (search_param, search_param, search_param))
     stations = [dict(row) for row in cursor.fetchall()]
 
-    # 4. Search Community Posts
-    cursor.execute("""
-        SELECT cp.id, cp.content, cp.image_url, cp.post_type, cp.created_at,
-               u.username, u.display_name, u.avatar_url,
-               s.name AS station_name, s.slug AS station_slug, s.icon AS station_icon,
-               r.title AS recipe_title
-        FROM community_posts cp
-        JOIN users u ON cp.user_id = u.id
-        LEFT JOIN stations s ON cp.station_id = s.id
-        LEFT JOIN recipes r ON cp.recipe_id = r.id
-        WHERE cp.is_hidden = 0
-          AND (cp.content LIKE ? OR r.title LIKE ?)
-        ORDER BY cp.id DESC
-        LIMIT 4;
-    """, (search_param, search_param))
-    posts = [dict(row) for row in cursor.fetchall()]
+    # 4. Search Community Posts with FTS5 BM25 ranking (fallback to LIKE)
+    posts = []
+    if fts_q:
+        try:
+            cursor.execute("""
+                SELECT cp.id, cp.content, cp.image_url, cp.post_type, cp.created_at,
+                       u.username, u.display_name, u.avatar_url,
+                       s.name AS station_name, s.slug AS station_slug, s.icon AS station_icon,
+                       r.title AS recipe_title
+                FROM posts_fts f
+                JOIN community_posts cp ON f.rowid = cp.id
+                JOIN users u ON cp.user_id = u.id
+                LEFT JOIN stations s ON cp.station_id = s.id
+                LEFT JOIN recipes r ON cp.recipe_id = r.id
+                WHERE cp.is_hidden = 0
+                  AND posts_fts MATCH ?
+                ORDER BY f.rank
+                LIMIT 4;
+            """, (fts_q,))
+            posts = [dict(row) for row in cursor.fetchall()]
+        except Exception:
+            posts = []
+
+    if not posts:
+        cursor.execute("""
+            SELECT cp.id, cp.content, cp.image_url, cp.post_type, cp.created_at,
+                   u.username, u.display_name, u.avatar_url,
+                   s.name AS station_name, s.slug AS station_slug, s.icon AS station_icon,
+                   r.title AS recipe_title
+            FROM community_posts cp
+            JOIN users u ON cp.user_id = u.id
+            LEFT JOIN stations s ON cp.station_id = s.id
+            LEFT JOIN recipes r ON cp.recipe_id = r.id
+            WHERE cp.is_hidden = 0
+              AND (cp.content LIKE ? OR r.title LIKE ?)
+            ORDER BY cp.id DESC
+            LIMIT 4;
+        """, (search_param, search_param))
+        posts = [dict(row) for row in cursor.fetchall()]
 
     conn.close()
     return jsonify({
@@ -1521,9 +1599,11 @@ def get_recipes():
     tag = (request.args.get("tag") or "").strip()
     difficulty = (request.args.get("difficulty") or "").strip()
     author_id = request.args.get("user_id")
+    limit = min(int(request.args.get("limit", 60)), 100)
+    before_id = request.args.get("before_id") or request.args.get("cursor")
 
-    # If unauthenticated public all recipes listing
-    is_public_all = not current_user and scope == "all" and not query and not cuisine and not tag and not difficulty and not author_id
+    # If unauthenticated public all recipes listing (first page)
+    is_public_all = not current_user and scope == "all" and not query and not cuisine and not tag and not difficulty and not author_id and not before_id and limit == 60
     if is_public_all:
         cached = _FEED_CACHE.get("recipes_public_all")
         if cached is not None:
@@ -1560,10 +1640,22 @@ def get_recipes():
         else:
             conditions.append("r.is_public = 1")
 
+    if before_id:
+        try:
+            conditions.append("r.id < ?")
+            params.append(int(before_id))
+        except (ValueError, TypeError):
+            pass
+
     if query:
-        conditions.append("(r.title LIKE ? OR r.description LIKE ? OR r.tags_json LIKE ?)")
-        wild = f"%{query}%"
-        params.extend([wild, wild, wild])
+        fts_q = sanitize_fts_query(query)
+        if fts_q:
+            conditions.append("r.id IN (SELECT rowid FROM recipes_fts WHERE recipes_fts MATCH ?)")
+            params.append(fts_q)
+        else:
+            conditions.append("(r.title LIKE ? OR r.description LIKE ? OR r.tags_json LIKE ?)")
+            wild = f"%{query}%"
+            params.extend([wild, wild, wild])
 
     if cuisine and cuisine != "All":
         conditions.append("r.cuisine = ?")
@@ -1589,8 +1681,8 @@ def get_recipes():
         FROM recipes r
         JOIN users u ON r.user_id = u.id
         {where_clause}
-        ORDER BY r.created_at DESC
-        LIMIT 60;
+        ORDER BY r.id DESC
+        LIMIT {limit};
     """
     cursor.execute(sql, params)
     recipes = [dict(row) for row in cursor.fetchall()]
@@ -1610,7 +1702,8 @@ def get_recipes():
         r["is_saved"] = (r["id"] in saved_ids)
 
     conn.close()
-    result = {"recipes": recipes}
+    next_cursor = recipes[-1]["id"] if recipes and len(recipes) == limit else None
+    result = {"recipes": recipes, "next_cursor": next_cursor}
     if is_public_all:
         _FEED_CACHE.set("recipes_public_all", result)
     return jsonify(result)
@@ -2438,9 +2531,11 @@ def get_posts():
     station_slug = (request.args.get("station") or "").strip()
     query = (request.args.get("q") or "").strip()
     dietary_filter = (request.args.get("dietary") or "").strip().lower()
+    limit = min(int(request.args.get("limit", 50)), 100)
+    before_id = request.args.get("before_id") or request.args.get("cursor")
 
-    # If unauthenticated public feed request
-    is_public_feed = (not current_user and not query and not dietary_filter and not station_slug and post_type in ["all", "trending", "showcase", "question", "post"])
+    # If unauthenticated public feed request (first page)
+    is_public_feed = (not current_user and not query and not dietary_filter and not station_slug and not before_id and limit == 50 and post_type in ["all", "trending", "showcase", "question", "post"])
     if is_public_feed:
         cached = _FEED_CACHE.get(f"posts_feed_{post_type}")
         if cached is not None:
@@ -2481,9 +2576,21 @@ def get_posts():
         conditions.append("st.slug = ?")
         params.append(station_slug)
 
+    if before_id:
+        try:
+            conditions.append("p.id < ?")
+            params.append(int(before_id))
+        except (ValueError, TypeError):
+            pass
+
     if query:
-        conditions.append("(p.content LIKE ? OR r.title LIKE ? OR st.name LIKE ?)")
-        params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
+        fts_q = sanitize_fts_query(query)
+        if fts_q:
+            conditions.append("(p.id IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?) OR r.id IN (SELECT rowid FROM recipes_fts WHERE recipes_fts MATCH ?))")
+            params.extend([fts_q, fts_q])
+        else:
+            conditions.append("(p.content LIKE ? OR r.title LIKE ? OR st.name LIKE ?)")
+            params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
 
     if dietary_filter:
         tag_match = f"%{dietary_filter}%"
@@ -2492,7 +2599,7 @@ def get_posts():
 
     where_clause = "WHERE " + " AND ".join(conditions)
 
-    order_clause = "ORDER BY p.created_at DESC"
+    order_clause = "ORDER BY p.id DESC"
     if post_type == "trending":
         # Rank by engagement on recent posts
         conditions.append("p.created_at >= datetime('now', '-14 days')")
@@ -2509,7 +2616,7 @@ def get_posts():
                 CASE WHEN p.station_id IN (SELECT station_id FROM station_members WHERE user_id = {current_user['id']}) THEN 5 ELSE 0 END +
                 CASE WHEN p.user_id IN (SELECT friend_id FROM friendships WHERE user_id = {current_user['id']}) THEN 4 ELSE 0 END +
                 (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id)
-            ) DESC, p.created_at DESC
+            ) DESC, p.id DESC
         """
 
     sql = f"""
@@ -2525,13 +2632,14 @@ def get_posts():
         LEFT JOIN stations st ON p.station_id = st.id
         {where_clause}
         {order_clause}
-        LIMIT 50;
+        LIMIT {limit};
     """
     cursor.execute(sql, params)
     posts = [dict(row) for row in cursor.fetchall()]
     posts = enrich_posts_batch(posts, current_user, conn)
     conn.close()
-    result = {"posts": posts}
+    next_cursor = posts[-1]["id"] if posts and len(posts) == limit else None
+    result = {"posts": posts, "next_cursor": next_cursor}
     if is_public_feed:
         _FEED_CACHE.set(f"posts_feed_{post_type}", result)
     return jsonify(result)
@@ -4027,13 +4135,13 @@ def upload_image():
         max_dim = 1280
         image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
 
-        # Generate secure randomized hex token filename
+        # Generate secure randomized hex token filename in modern WebP format
         hex_token = secrets.token_hex(16)
-        filename = f"{hex_token}.jpg"
+        filename = f"{hex_token}.webp"
         save_path = os.path.join(UPLOAD_FOLDER, filename)
 
-        # Save with quality optimization
-        image.save(save_path, format="JPEG", quality=85, optimize=True)
+        # Save as WebP with quality 85 for 30-50% smaller payloads
+        image.save(save_path, format="WEBP", quality=85, method=4)
 
         image_url = f"/uploads/{filename}"
         return jsonify({"success": True, "url": image_url, "filename": filename})

@@ -30,6 +30,23 @@ function stopNotificationPolling() {
   }
 }
 
+// Page Visibility Engine: pause polling when tab is hidden, immediately refresh on focus
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (notificationPollTimer) {
+      clearInterval(notificationPollTimer);
+      notificationPollTimer = null;
+    }
+  } else {
+    if (currentUser) {
+      checkNotifications();
+      if (!notificationPollTimer) {
+        notificationPollTimer = setInterval(checkNotifications, 25000);
+      }
+    }
+  }
+});
+
 /**
  * Fetch latest notifications and update badge.
  */

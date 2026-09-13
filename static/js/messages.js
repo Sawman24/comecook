@@ -31,6 +31,23 @@ function initDirectMessaging() {
   }
 }
 
+// Page Visibility Engine: pause DM polling when tab is hidden, immediately refresh on focus
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (dmPollingInterval) {
+      clearInterval(dmPollingInterval);
+      dmPollingInterval = null;
+    }
+  } else {
+    if (currentUser) {
+      updateUnreadDmCount();
+      if (!dmPollingInterval) {
+        dmPollingInterval = setInterval(updateUnreadDmCount, 15000);
+      }
+    }
+  }
+});
+
 async function updateUnreadDmCount() {
   if (!currentUser) return;
   try {

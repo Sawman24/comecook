@@ -575,6 +575,67 @@ def _run_init_db_schema():
     except Exception:
         pass
 
+    # 26. FTS5 FULL-TEXT SEARCH VIRTUAL TABLES & TRIGGERS
+    try:
+        cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS recipes_fts USING fts5(
+            title,
+            description,
+            cuisine,
+            ingredients_json,
+            tags_json,
+            content='recipes',
+            content_rowid='id'
+        );
+        """)
+        cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+            content,
+            content='community_posts',
+            content_rowid='id'
+        );
+        """)
+
+        # FTS Triggers for recipes
+        cursor.executescript("""
+        CREATE TRIGGER IF NOT EXISTS recipes_ai AFTER INSERT ON recipes BEGIN
+            INSERT INTO recipes_fts(rowid, title, description, cuisine, ingredients_json, tags_json)
+            VALUES (new.id, new.title, new.description, new.cuisine, new.ingredients_json, new.tags_json);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS recipes_ad AFTER DELETE ON recipes BEGIN
+            INSERT INTO recipes_fts(recipes_fts, rowid, title, description, cuisine, ingredients_json, tags_json)
+            VALUES('delete', old.id, old.title, old.description, old.cuisine, old.ingredients_json, old.tags_json);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS recipes_au AFTER UPDATE ON recipes BEGIN
+            INSERT INTO recipes_fts(recipes_fts, rowid, title, description, cuisine, ingredients_json, tags_json)
+            VALUES('delete', old.id, old.title, old.description, old.cuisine, old.ingredients_json, old.tags_json);
+            INSERT INTO recipes_fts(rowid, title, description, cuisine, ingredients_json, tags_json)
+            VALUES (new.id, new.title, new.description, new.cuisine, new.ingredients_json, new.tags_json);
+        END;
+
+        -- FTS Triggers for community_posts
+        CREATE TRIGGER IF NOT EXISTS posts_ai AFTER INSERT ON community_posts BEGIN
+            INSERT INTO posts_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS posts_ad AFTER DELETE ON community_posts BEGIN
+            INSERT INTO posts_fts(posts_fts, rowid, content) VALUES('delete', old.id, old.content);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS posts_au AFTER UPDATE ON community_posts BEGIN
+            INSERT INTO posts_fts(posts_fts, rowid, content) VALUES('delete', old.id, old.content);
+            INSERT INTO posts_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+        """)
+
+        # Re-populate FTS tables on schema initialization
+        cursor.execute("INSERT OR IGNORE INTO recipes_fts(rowid, title, description, cuisine, ingredients_json, tags_json) SELECT id, title, description, cuisine, ingredients_json, tags_json FROM recipes;")
+        cursor.execute("INSERT OR IGNORE INTO posts_fts(rowid, content) SELECT id, content FROM community_posts;")
+    except Exception as fts_err:
+        print(f"[FTS5] Full-text search initialization note: {fts_err}")
+
     conn.commit()
     conn.close()
 
