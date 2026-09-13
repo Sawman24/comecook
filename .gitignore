@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# Local databases & temp files
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite3
+cooked.db
+
+# User uploaded media (preserves directory with .gitkeep)
+uploads/*
+!uploads/.gitkeep
+
+# Environment variables & secrets
+.env
+.env.local
+.env.production
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+logs/
+
+# Testing & coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Agent App Data
+.gemini/
+scratch/

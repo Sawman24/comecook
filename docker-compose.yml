@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  cooked-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cooked-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5050}:5050"
+    environment:
+      - COOKED_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-changeme_use_secure_random_key}
+      - COOKED_DB_PATH=/app/data/cooked.db
+      - UPLOAD_FOLDER=/app/uploads
+      - ADMIN_USERNAMES=${ADMIN_USERNAMES:-}
+      - COOKED_SEED_DEMO=${COOKED_SEED_DEMO:-0}
+    volumes:
+      - cooked-data:/app/data
+      - cooked-uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  cooked-data:
+    name: cooked-data
+  cooked-uploads:
+    name: cooked-uploads

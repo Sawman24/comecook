@@ -1,0 +1,1631 @@
+import os
+import secrets
+import json
+import re
+from datetime import datetime, timezone, timedelta
+from flask import Flask, request, jsonify, g, send_from_directory, make_response
+from PIL import Image
+import io
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from database import get_db_connection, init_db, seed_data_if_empty
+from auth import (
+    hash_password, verify_password, create_user_session,
+    get_authenticated_user, delete_user_session, require_auth, admin_required,
+    is_ip_rate_limited, record_login_attempt, SESSION_COOKIE_NAME, ADMIN_USERNAMES,
+    validate_password_strength
+)
+from moderation_filter import contains_profanity, validate_clean_content
+from scraper import scrape_recipe_from_url
+
+# Setup App
+app = Flask(__name__, static_folder="static", static_url_path="")
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB max payload
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+# Support reverse proxy HTTPS headers (Nginx, Caddy, Cloudflare, Traefik)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.path.dirname(__file__), "uploads"))
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Initialize Database Schema and Default Stations
+init_db()
+seed_data_if_empty()
+
+def is_request_secure() -> bool:
+    """Check if the current request is HTTPS or running in production environment."""
+    return (
+        request.is_secure or
+        request.headers.get("X-Forwarded-Proto", "").lower() == "https" or
+        os.environ.get("COOKED_ENV", "").lower() == "production" or
+        os.environ.get("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
+    )
+
+@app.after_request
+def apply_security_headers(response):
+    """Enforce industry-standard encryption, transport, and browser security headers."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if is_request_secure():
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    return response
+
+
+# ==============================================================================
+# HEALTHCHECK & SYSTEM STATUS
+# ==============================================================================
+
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """Service healthcheck endpoint for Docker, Kubernetes, and reverse proxies."""
+    return jsonify({
+        "status": "healthy",
+        "service": "cooked",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }), 200
+
+
+# ==============================================================================
+# STATIC & MEDIA SERVING
+# ==============================================================================
+
+@app.route("/")
+def index():
+    return send_from_directory(app.static_folder, "index.html")
+
+@app.route("/uploads/<path:filename>")
+@app.route("/api/uploads/<path:filename>")
+def serve_upload(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+
+
+# ==============================================================================
+# AUTHENTICATION ENDPOINTS
+# ==============================================================================
+
+@app.route("/api/auth/register", methods=["POST"])
+def register():
+    data = request.get_json() or {}
+    username = (data.get("username") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    display_name = (data.get("display_name") or username).strip()
+    avatar_url = (data.get("avatar_url") or "").strip()
+    bio = (data.get("bio") or "").strip()
+
+    if not username or len(username) < 3:
+        return jsonify({"error": "Validation Error", "message": "Username must be at least 3 characters"}), 400
+    if len(username) > 30:
+        return jsonify({"error": "Validation Error", "message": "Username must be 30 characters or fewer"}), 400
+    if not email or "@" not in email:
+        return jsonify({"error": "Validation Error", "message": "Valid email address is required"}), 400
+
+    # Content Moderation: Profanity & Slur Filter on User Profile
+    is_clean, err_msg = validate_clean_content(username, "Username")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    is_clean, err_msg = validate_clean_content(display_name, "Display Name")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    if bio:
+        is_clean, err_msg = validate_clean_content(bio, "Culinary Bio")
+        if not is_clean:
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    # Strong Password Policy Verification
+    is_valid_pw, pw_err = validate_password_strength(password)
+    if not is_valid_pw:
+        return jsonify({"error": "Validation Error", "message": pw_err}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Check for existing username or email
+    cursor.execute("SELECT id FROM users WHERE username = ? OR email = ?;", (username, email))
+    if cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "Conflict", "message": "Username or email is already registered"}), 409
+
+    # Security Mitigation: Registration Injection Immunity
+    # Client-supplied is_admin is explicitly ignored.
+    # Admin is granted ONLY if table is empty (first bootstrapping user) or username matches ADMIN_USERNAMES.
+    cursor.execute("SELECT COUNT(*) AS count FROM users;")
+    user_count = cursor.fetchone()["count"]
+    is_admin = 1 if (user_count == 0 or username.lower() in ADMIN_USERNAMES) else 0
+
+    pw_hash = hash_password(password)
+    cursor.execute("""
+        INSERT INTO users (username, email, password_hash, display_name, avatar_url, bio, is_admin)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
+    """, (username, email, pw_hash, display_name, avatar_url, bio, is_admin))
+    user_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    # Create session token and set HttpOnly cookie
+    token = create_user_session(user_id)
+    response = make_response(jsonify({
+        "success": True,
+        "message": "Account registered successfully",
+        "user": {
+            "id": user_id,
+            "username": username,
+            "email": email,
+            "display_name": display_name,
+            "avatar_url": avatar_url,
+            "bio": bio,
+            "is_admin": is_admin
+        },
+        "token": token
+    }), 201)
+
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=14 * 86400,
+        httponly=True,
+        samesite="Lax",
+        secure=is_request_secure()
+    )
+    return response
+
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    ip = request.remote_addr or "127.0.0.1"
+
+    # Security Mitigation: Rate-Limiting & Brute Force Lockout
+    if is_ip_rate_limited(ip):
+        return jsonify({
+            "error": "Rate Limited",
+            "message": "Too many failed login attempts. Please try again after 5 minutes."
+        }), 429
+
+    data = request.get_json() or {}
+    username_or_email = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+
+    if not username_or_email or not password:
+        return jsonify({"error": "Validation Error", "message": "Username/email and password required"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, username, email, password_hash, display_name, avatar_url, bio, is_active, is_admin
+        FROM users
+        WHERE username = ? OR email = ?;
+    """, (username_or_email, username_or_email.lower()))
+    user = cursor.fetchone()
+    conn.close()
+
+    if not user or not verify_password(password, user["password_hash"]):
+        record_login_attempt(ip, username_or_email, success=False)
+        return jsonify({"error": "Unauthorized", "message": "Invalid username or password"}), 401
+
+    if user["is_active"] != 1:
+        return jsonify({"error": "Forbidden", "message": "Account has been deactivated"}), 403
+
+    record_login_attempt(ip, username_or_email, success=True)
+    token = create_user_session(user["id"])
+
+    response = make_response(jsonify({
+        "success": True,
+        "message": "Logged in successfully",
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "email": user["email"],
+            "display_name": user["display_name"],
+            "avatar_url": user["avatar_url"],
+            "bio": user["bio"],
+            "is_admin": user["is_admin"]
+        },
+        "token": token
+    }))
+
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=14 * 86400,
+        httponly=True,
+        samesite="Lax",
+        secure=is_request_secure()
+    )
+    return response
+
+@app.route("/api/auth/logout", methods=["POST"])
+def logout():
+    user = get_authenticated_user()
+    if user and "token" in user:
+        delete_user_session(user["token"])
+
+    response = make_response(jsonify({"success": True, "message": "Logged out"}))
+    response.set_cookie(SESSION_COOKIE_NAME, "", expires=0, httponly=True, samesite="Lax", secure=is_request_secure())
+    return response
+
+@app.route("/api/auth/me", methods=["GET"])
+def get_me():
+    user = get_authenticated_user()
+    if not user:
+        return jsonify({"user": None}), 200
+    return jsonify({"user": user}), 200
+
+@app.route("/api/auth/forgot-password", methods=["POST"])
+def forgot_password():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "Validation Error", "message": "Email is required"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE email = ?;", (email,))
+    user = cursor.fetchone()
+
+    token = secrets.token_urlsafe(32)
+    if user:
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO password_resets (user_id, token, expires_at)
+            VALUES (?, ?, ?);
+        """, (user["id"], token, expires_at))
+        conn.commit()
+
+    conn.close()
+    # Dev Fallback response containing token for quick testability
+    return jsonify({
+        "success": True,
+        "message": "If this email exists, a password reset link has been generated.",
+        "dev_reset_token": token if user else None
+    })
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+def reset_password():
+    data = request.get_json() or {}
+    token = data.get("token") or ""
+    new_password = data.get("new_password") or ""
+
+    if not token:
+        return jsonify({"error": "Validation Error", "message": "Reset token is required"}), 400
+
+    is_valid_pw, pw_err = validate_password_strength(new_password)
+    if not is_valid_pw:
+        return jsonify({"error": "Validation Error", "message": pw_err}), 400
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, user_id FROM password_resets
+        WHERE token = ? AND expires_at > ? AND used = 0;
+    """, (token, now_str))
+    reset_entry = cursor.fetchone()
+
+    if not reset_entry:
+        conn.close()
+        return jsonify({"error": "Invalid Token", "message": "Password reset token is invalid or expired"}), 400
+
+    pw_hash = hash_password(new_password)
+    cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?;", (pw_hash, reset_entry["user_id"]))
+    cursor.execute("UPDATE password_resets SET used = 1 WHERE id = ?;", (reset_entry["id"],))
+    # Invalidate existing active sessions for security
+    cursor.execute("DELETE FROM sessions WHERE user_id = ?;", (reset_entry["user_id"],))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Password successfully reset. Please log in with your new password."})
+
+
+# ==============================================================================
+# USER PROFILES & SOCIAL GRAPH
+# ==============================================================================
+
+@app.route("/api/users/<username>", methods=["GET"])
+def get_user_profile(username):
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, username, display_name, avatar_url, bio, is_admin, created_at
+        FROM users
+        WHERE username = ? AND is_active = 1;
+    """, (username,))
+    profile_user = cursor.fetchone()
+
+    if not profile_user:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "User not found"}), 404
+
+    target_id = profile_user["id"]
+
+    # Calculate statistics
+    cursor.execute("SELECT COUNT(*) AS count FROM recipes WHERE user_id = ? AND is_public = 1;", (target_id,))
+    recipes_count = cursor.fetchone()["count"]
+
+    cursor.execute("SELECT COUNT(*) AS count FROM friendships WHERE friend_id = ?;", (target_id,))
+    followers_count = cursor.fetchone()["count"]
+
+    cursor.execute("SELECT COUNT(*) AS count FROM friendships WHERE user_id = ?;", (target_id,))
+    following_count = cursor.fetchone()["count"]
+
+    is_following = False
+    if current_user:
+        cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], target_id))
+        is_following = bool(cursor.fetchone())
+
+    # Get recent public recipes
+    cursor.execute("""
+        SELECT id, title, description, prep_time_min, cook_time_min, servings, difficulty, cuisine, tags_json, image_url, created_at
+        FROM recipes
+        WHERE user_id = ? AND is_public = 1
+        ORDER BY created_at DESC LIMIT 12;
+    """, (target_id,))
+    recent_recipes = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+
+    return jsonify({
+        "user": dict(profile_user),
+        "stats": {
+            "recipes_count": recipes_count,
+            "followers_count": followers_count,
+            "following_count": following_count,
+            "is_following": is_following
+        },
+        "recipes": recent_recipes
+    })
+
+@app.route("/api/users/profile", methods=["PUT"])
+@require_auth
+def update_profile():
+    data = request.get_json() or {}
+    display_name = (data.get("display_name") or "").strip()
+    avatar_url = (data.get("avatar_url") or "").strip()
+    bio = (data.get("bio") or "").strip()
+
+    if not display_name:
+        return jsonify({"error": "Validation Error", "message": "Display name cannot be empty"}), 400
+
+    is_clean, err_msg = validate_clean_content(display_name, "Display Name")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    if bio:
+        is_clean, err_msg = validate_clean_content(bio, "Culinary Bio")
+        if not is_clean:
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET display_name = ?, avatar_url = ?, bio = ?
+        WHERE id = ?;
+    """, (display_name, avatar_url, bio, g.current_user["id"]))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Profile updated successfully"})
+
+@app.route("/api/users/<int:target_user_id>/follow", methods=["POST", "DELETE"])
+@require_auth
+def toggle_follow(target_user_id):
+    if target_user_id == g.current_user["id"]:
+        return jsonify({"error": "Bad Request", "message": "You cannot follow yourself"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        cursor.execute("""
+            INSERT OR IGNORE INTO friendships (user_id, friend_id)
+            VALUES (?, ?);
+        """, (g.current_user["id"], target_user_id))
+        is_following = True
+    else:
+        cursor.execute("""
+            DELETE FROM friendships
+            WHERE user_id = ? AND friend_id = ?;
+        """, (g.current_user["id"], target_user_id))
+        is_following = False
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "is_following": is_following})
+
+@app.route("/api/users/featured", methods=["GET"])
+def get_featured_chefs():
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
+               (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count,
+               (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
+        FROM users u
+        WHERE u.is_active = 1
+        ORDER BY recipe_count DESC, follower_count DESC
+        LIMIT 6;
+    """)
+    chefs = [dict(r) for r in cursor.fetchall()]
+
+    if current_user:
+        for chef in chefs:
+            cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], chef["id"]))
+            chef["is_following"] = bool(cursor.fetchone())
+
+    conn.close()
+    return jsonify({"chefs": chefs})
+
+
+# ==============================================================================
+# RECIPES & RECIPE BOX
+# ==============================================================================
+
+@app.route("/api/recipes", methods=["GET"])
+def get_recipes():
+    current_user = get_authenticated_user()
+    scope = request.args.get("scope", "all")  # all, mine, saved, public
+    query = (request.args.get("q") or "").strip()
+    cuisine = (request.args.get("cuisine") or "").strip()
+    tag = (request.args.get("tag") or "").strip()
+    difficulty = (request.args.get("difficulty") or "").strip()
+    author_id = request.args.get("user_id")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    conditions = []
+    params = []
+
+    if scope == "mine":
+        if not current_user:
+            conn.close()
+            return jsonify({"recipes": []})
+        conditions.append("r.user_id = ?")
+        params.append(current_user["id"])
+    elif scope == "saved":
+        if not current_user:
+            conn.close()
+            return jsonify({"recipes": []})
+        conditions.append("r.id IN (SELECT recipe_id FROM saved_recipes WHERE user_id = ?)")
+        params.append(current_user["id"])
+    elif author_id:
+        conditions.append("r.user_id = ?")
+        params.append(author_id)
+        if not current_user or current_user["id"] != int(author_id):
+            conditions.append("r.is_public = 1")
+    else:
+        # Public recipes + own private recipes
+        if current_user:
+            conditions.append("(r.is_public = 1 OR r.user_id = ?)")
+            params.append(current_user["id"])
+        else:
+            conditions.append("r.is_public = 1")
+
+    if query:
+        conditions.append("(r.title LIKE ? OR r.description LIKE ? OR r.tags_json LIKE ?)")
+        wild = f"%{query}%"
+        params.extend([wild, wild, wild])
+
+    if cuisine and cuisine != "All":
+        conditions.append("r.cuisine = ?")
+        params.append(cuisine)
+
+    if difficulty and difficulty != "All":
+        conditions.append("r.difficulty = ?")
+        params.append(difficulty)
+
+    if tag:
+        conditions.append("r.tags_json LIKE ?")
+        params.append(f"%{tag}%")
+
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+    sql = f"""
+        SELECT r.id, r.user_id, r.original_author_id, r.title, r.description,
+               r.prep_time_min, r.cook_time_min, r.servings, r.difficulty, r.cuisine,
+               r.tags_json, r.image_url, r.source_url, r.is_public, r.created_at,
+               u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar
+        FROM recipes r
+        JOIN users u ON r.user_id = u.id
+        {where_clause}
+        ORDER BY r.created_at DESC
+        LIMIT 60;
+    """
+    cursor.execute(sql, params)
+    recipes = [dict(row) for row in cursor.fetchall()]
+
+    # Parse tags & check bookmark state
+    for r in recipes:
+        try:
+            r["tags"] = json.loads(r["tags_json"])
+        except Exception:
+            r["tags"] = []
+        if current_user:
+            cursor.execute("SELECT id FROM saved_recipes WHERE user_id = ? AND recipe_id = ?;", (current_user["id"], r["id"]))
+            r["is_saved"] = bool(cursor.fetchone())
+        else:
+            r["is_saved"] = False
+
+    conn.close()
+    return jsonify({"recipes": recipes})
+
+@app.route("/api/recipes/<int:recipe_id>", methods=["GET"])
+def get_recipe_detail(recipe_id):
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT r.*,
+               u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar,
+               orig.username AS orig_author_username, orig.display_name AS orig_author_display_name
+        FROM recipes r
+        JOIN users u ON r.user_id = u.id
+        LEFT JOIN users orig ON r.original_author_id = orig.id
+        WHERE r.id = ?;
+    """, (recipe_id,))
+    recipe = cursor.fetchone()
+
+    if not recipe:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
+
+    # Security check: Private recipe access
+    if recipe["is_public"] != 1 and (not current_user or (current_user["id"] != recipe["user_id"] and current_user["is_admin"] != 1)):
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "This recipe is private"}), 403
+
+    recipe_dict = dict(recipe)
+    try:
+        recipe_dict["tags"] = json.loads(recipe_dict["tags_json"])
+        recipe_dict["ingredients"] = json.loads(recipe_dict["ingredients_json"])
+        recipe_dict["steps"] = json.loads(recipe_dict["steps_json"])
+    except Exception:
+        recipe_dict["tags"] = []
+        recipe_dict["ingredients"] = []
+        recipe_dict["steps"] = []
+
+    if current_user:
+        cursor.execute("SELECT id, folder_name, notes FROM saved_recipes WHERE user_id = ? AND recipe_id = ?;", (current_user["id"], recipe_id))
+        saved = cursor.fetchone()
+        recipe_dict["is_saved"] = bool(saved)
+        recipe_dict["saved_folder"] = saved["folder_name"] if saved else ""
+    else:
+        recipe_dict["is_saved"] = False
+        recipe_dict["saved_folder"] = ""
+
+    conn.close()
+    return jsonify({"recipe": recipe_dict})
+
+@app.route("/api/recipes", methods=["POST"])
+@require_auth
+def create_recipe():
+    data = request.get_json() or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "Validation Error", "message": "Recipe title is required"}), 400
+
+    description = (data.get("description") or "").strip()
+
+    is_clean, err_msg = validate_clean_content(title, "Recipe Title")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    if description:
+        is_clean, err_msg = validate_clean_content(description, "Recipe Description")
+        if not is_clean:
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    prep_time = int(data.get("prep_time_min") or 0)
+    cook_time = int(data.get("cook_time_min") or 0)
+    servings = max(1, int(data.get("servings") or 4))
+    difficulty = data.get("difficulty") or "Medium"
+    cuisine = data.get("cuisine") or "Global"
+    tags = data.get("tags") or []
+    ingredients = data.get("ingredients") or []
+    steps = data.get("steps") or []
+    image_url = (data.get("image_url") or "").strip()
+    source_url = (data.get("source_url") or "").strip()
+    is_public = 1 if data.get("is_public", True) else 0
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO recipes (
+            user_id, title, description, prep_time_min, cook_time_min, servings,
+            difficulty, cuisine, tags_json, ingredients_json, steps_json,
+            image_url, source_url, is_public
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, (
+        g.current_user["id"], title, description, prep_time, cook_time, servings,
+        difficulty, cuisine, json.dumps(tags), json.dumps(ingredients), json.dumps(steps),
+        image_url, source_url, is_public
+    ))
+    recipe_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Recipe created", "recipe_id": recipe_id}), 201
+
+@app.route("/api/recipes/<int:recipe_id>", methods=["PUT"])
+@require_auth
+def update_recipe(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Security Mitigation: IDOR Protection
+    cursor.execute("SELECT id, user_id FROM recipes WHERE id = ?;", (recipe_id,))
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
+
+    if existing["user_id"] != g.current_user["id"] and g.current_user["is_admin"] != 1:
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "You can only edit your own recipes"}), 403
+
+    data = request.get_json() or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        conn.close()
+        return jsonify({"error": "Validation Error", "message": "Recipe title is required"}), 400
+
+    description = (data.get("description") or "").strip()
+
+    is_clean, err_msg = validate_clean_content(title, "Recipe Title")
+    if not is_clean:
+        conn.close()
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    if description:
+        is_clean, err_msg = validate_clean_content(description, "Recipe Description")
+        if not is_clean:
+            conn.close()
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+    prep_time = int(data.get("prep_time_min") or 0)
+    cook_time = int(data.get("cook_time_min") or 0)
+    servings = max(1, int(data.get("servings") or 4))
+    difficulty = data.get("difficulty") or "Medium"
+    cuisine = data.get("cuisine") or "Global"
+    tags = data.get("tags") or []
+    ingredients = data.get("ingredients") or []
+    steps = data.get("steps") or []
+    image_url = (data.get("image_url") or "").strip()
+    source_url = (data.get("source_url") or "").strip()
+    is_public = 1 if data.get("is_public", True) else 0
+
+    cursor.execute("""
+        UPDATE recipes SET
+            title = ?, description = ?, prep_time_min = ?, cook_time_min = ?, servings = ?,
+            difficulty = ?, cuisine = ?, tags_json = ?, ingredients_json = ?, steps_json = ?,
+            image_url = ?, source_url = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?;
+    """, (
+        title, description, prep_time, cook_time, servings,
+        difficulty, cuisine, json.dumps(tags), json.dumps(ingredients), json.dumps(steps),
+        image_url, source_url, is_public, recipe_id
+    ))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Recipe updated successfully"})
+
+@app.route("/api/recipes/<int:recipe_id>", methods=["DELETE"])
+@require_auth
+def delete_recipe(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Security Mitigation: IDOR Protection
+    cursor.execute("SELECT id, user_id FROM recipes WHERE id = ?;", (recipe_id,))
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
+
+    if existing["user_id"] != g.current_user["id"] and g.current_user["is_admin"] != 1:
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "You can only delete your own recipes"}), 403
+
+    cursor.execute("DELETE FROM recipes WHERE id = ?;", (recipe_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Recipe deleted"})
+
+@app.route("/api/recipes/<int:recipe_id>/save", methods=["POST", "DELETE"])
+@require_auth
+def toggle_save_recipe(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        data = request.get_json() or {}
+        folder = data.get("folder_name") or "Favorites"
+        notes = data.get("notes") or ""
+        cursor.execute("""
+            INSERT OR REPLACE INTO saved_recipes (user_id, recipe_id, folder_name, notes)
+            VALUES (?, ?, ?, ?);
+        """, (g.current_user["id"], recipe_id, folder, notes))
+        saved = True
+    else:
+        cursor.execute("""
+            DELETE FROM saved_recipes
+            WHERE user_id = ? AND recipe_id = ?;
+        """, (g.current_user["id"], recipe_id))
+        saved = False
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "is_saved": saved})
+
+@app.route("/api/recipes/<int:recipe_id>/fork", methods=["POST"])
+@require_auth
+def fork_recipe(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM recipes WHERE id = ?;", (recipe_id,))
+    orig = cursor.fetchone()
+    if not orig:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
+
+    new_title = f"{orig['title']} (My Fork)"
+    cursor.execute("""
+        INSERT INTO recipes (
+            user_id, original_author_id, title, description, prep_time_min, cook_time_min,
+            servings, difficulty, cuisine, tags_json, ingredients_json, steps_json,
+            image_url, source_url, is_public
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+    """, (
+        g.current_user["id"], orig["user_id"], new_title, orig["description"],
+        orig["prep_time_min"], orig["cook_time_min"], orig["servings"],
+        orig["difficulty"], orig["cuisine"], orig["tags_json"], orig["ingredients_json"],
+        orig["steps_json"], orig["image_url"], orig["source_url"]
+    ))
+    new_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Recipe forked to your Recipe Box!", "recipe_id": new_id}), 201
+
+@app.route("/api/recipes/scrape", methods=["POST"])
+@require_auth
+def scrape_recipe():
+    data = request.get_json() or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "Validation Error", "message": "Recipe URL is required"}), 400
+
+    try:
+        scraped_data = scrape_recipe_from_url(url)
+        return jsonify({"success": True, "recipe": scraped_data})
+    except Exception as e:
+        return jsonify({"error": "Scrape Error", "message": f"Could not scrape recipe: {str(e)}"}), 422
+
+
+# ==============================================================================
+# KITCHEN STATIONS (Sub-Communities)
+# ==============================================================================
+
+@app.route("/api/stations", methods=["GET"])
+def get_stations():
+    current_user = get_authenticated_user()
+    query = (request.args.get("q") or "").strip()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if query:
+        cursor.execute("""
+            SELECT s.id, s.name, s.slug, s.description, s.icon, s.banner_url, s.rules_text, s.member_count, s.created_at,
+                   (SELECT COUNT(*) FROM community_posts cp WHERE cp.station_id = s.id AND cp.is_hidden = 0) AS post_count
+            FROM stations s
+            WHERE s.name LIKE ? OR s.description LIKE ?
+            ORDER BY s.member_count DESC, s.id ASC;
+        """, (f"%{query}%", f"%{query}%"))
+    else:
+        cursor.execute("""
+            SELECT s.id, s.name, s.slug, s.description, s.icon, s.banner_url, s.rules_text, s.member_count, s.created_at,
+                   (SELECT COUNT(*) FROM community_posts cp WHERE cp.station_id = s.id AND cp.is_hidden = 0) AS post_count
+            FROM stations s
+            ORDER BY s.member_count DESC, s.id ASC;
+        """)
+
+    stations = [dict(row) for row in cursor.fetchall()]
+
+    if current_user:
+        cursor.execute("SELECT station_id, role FROM station_members WHERE user_id = ?;", (current_user["id"],))
+        memberships = {r["station_id"]: r["role"] for r in cursor.fetchall()}
+        for s in stations:
+            s["is_member"] = s["id"] in memberships
+            s["user_role"] = memberships.get(s["id"])
+    else:
+        for s in stations:
+            s["is_member"] = False
+            s["user_role"] = None
+
+    conn.close()
+    return jsonify({"success": True, "stations": stations})
+
+@app.route("/api/stations/<slug>", methods=["GET"])
+def get_station_detail(slug):
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT s.id, s.name, s.slug, s.description, s.icon, s.banner_url, s.rules_text, s.member_count, s.created_at,
+               (SELECT COUNT(*) FROM community_posts cp WHERE cp.station_id = s.id AND cp.is_hidden = 0) AS post_count
+        FROM stations s
+        WHERE s.slug = ?;
+    """, (slug,))
+    station = cursor.fetchone()
+    if not station:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Kitchen station not found"}), 404
+
+    station_dict = dict(station)
+
+    # Lead cooks & member sample
+    cursor.execute("""
+        SELECT u.id, u.username, u.display_name, u.avatar_url, sm.role
+        FROM station_members sm
+        JOIN users u ON sm.user_id = u.id
+        WHERE sm.station_id = ?
+        ORDER BY (CASE WHEN sm.role = 'lead_cook' THEN 1 ELSE 2 END), sm.created_at ASC
+        LIMIT 12;
+    """, (station_dict["id"],))
+    members = [dict(m) for m in cursor.fetchall()]
+    station_dict["lead_cooks"] = [m for m in members if m["role"] == "lead_cook"]
+    station_dict["members_sample"] = members
+
+    if current_user:
+        cursor.execute("SELECT role FROM station_members WHERE station_id = ? AND user_id = ?;", (station_dict["id"], current_user["id"]))
+        mem = cursor.fetchone()
+        station_dict["is_member"] = bool(mem)
+        station_dict["user_role"] = mem["role"] if mem else None
+    else:
+        station_dict["is_member"] = False
+        station_dict["user_role"] = None
+
+    conn.close()
+    return jsonify({"success": True, "station": station_dict})
+
+@app.route("/api/stations/<slug>/join", methods=["POST"])
+@require_auth
+def toggle_station_membership(slug):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, name FROM stations WHERE slug = ?;", (slug,))
+    station = cursor.fetchone()
+    if not station:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Kitchen station not found"}), 404
+
+    station_id = station["id"]
+    cursor.execute("SELECT id FROM station_members WHERE station_id = ? AND user_id = ?;", (station_id, g.current_user["id"]))
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute("DELETE FROM station_members WHERE station_id = ? AND user_id = ?;", (station_id, g.current_user["id"]))
+        is_member = False
+        message = f"Clocked out from {station['name']}"
+    else:
+        cursor.execute("INSERT INTO station_members (station_id, user_id, role) VALUES (?, ?, 'chef');", (station_id, g.current_user["id"]))
+        is_member = True
+        message = f"Clocked into {station['name']}!"
+
+    cursor.execute("SELECT COUNT(*) AS cnt FROM station_members WHERE station_id = ?;", (station_id,))
+    new_count = cursor.fetchone()["cnt"]
+    cursor.execute("UPDATE stations SET member_count = ? WHERE id = ?;", (new_count, station_id))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "is_member": is_member,
+        "member_count": new_count,
+        "message": message
+    })
+
+@app.route("/api/stations", methods=["POST"])
+@require_auth
+def create_station():
+    data = request.get_json() or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Validation Error", "message": "Station name is required"}), 400
+
+    if len(name) > 60:
+        return jsonify({"error": "Validation Error", "message": "Station name must be 60 characters or fewer"}), 400
+
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not slug:
+        slug = f"station-{secrets.token_hex(4)}"
+
+    description = (data.get("description") or "").strip()
+    if not description:
+        return jsonify({"error": "Validation Error", "message": "Station description is required"}), 400
+
+    icon = (data.get("icon") or "🍳").strip()[:8]
+    banner_url = (data.get("banner_url") or "").strip()
+    rules_text = (data.get("rules_text") or "").strip()
+
+    is_clean, err_msg = validate_clean_content(name, "Station Name")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    is_clean, err_msg = validate_clean_content(description, "Station Description")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    if rules_text:
+        is_clean, err_msg = validate_clean_content(rules_text, "Station Rules")
+        if not is_clean:
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM stations WHERE slug = ? OR name = ?;", (slug, name))
+    if cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "Conflict", "message": "A Kitchen Station with this name or slug already exists"}), 409
+
+    cursor.execute("""
+        INSERT INTO stations (name, slug, description, icon, banner_url, rules_text, member_count, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?);
+    """, (name, slug, description, icon, banner_url, rules_text, g.current_user["id"]))
+    station_id = cursor.lastrowid
+
+    # Automatically clock in creator as lead_cook
+    cursor.execute("""
+        INSERT INTO station_members (station_id, user_id, role)
+        VALUES (?, ?, 'lead_cook');
+    """, (station_id, g.current_user["id"]))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "message": f"Station '{name}' opened successfully!",
+        "station": {
+            "id": station_id,
+            "name": name,
+            "slug": slug,
+            "description": description,
+            "icon": icon,
+            "banner_url": banner_url,
+            "rules_text": rules_text,
+            "member_count": 1,
+            "is_member": True,
+            "user_role": "lead_cook"
+        }
+    }), 201
+
+
+# ==============================================================================
+# COMMUNITY POSTS, LIKES, COMMENTS & MODERATION
+# ==============================================================================
+
+@app.route("/api/posts", methods=["GET"])
+def get_posts():
+    current_user = get_authenticated_user()
+    post_type = request.args.get("type", "all")  # all, question, showcase, post, following
+    station_slug = (request.args.get("station") or "").strip()
+    query = (request.args.get("q") or "").strip()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    conditions = ["p.is_hidden = 0"]
+    params = []
+
+    if post_type in ["question", "showcase", "post"]:
+        conditions.append("p.post_type = ?")
+        params.append(post_type)
+    elif post_type == "following":
+        if not current_user:
+            conn.close()
+            return jsonify({"posts": []})
+        conditions.append("p.user_id IN (SELECT friend_id FROM friendships WHERE user_id = ?)")
+        params.append(current_user["id"])
+
+    if station_slug:
+        conditions.append("st.slug = ?")
+        params.append(station_slug)
+
+    if query:
+        conditions.append("(p.content LIKE ? OR r.title LIKE ? OR st.name LIKE ?)")
+        params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
+
+    where_clause = "WHERE " + " AND ".join(conditions)
+
+    sql = f"""
+        SELECT p.id, p.user_id, p.content, p.image_url, p.recipe_id, p.station_id, p.post_type, p.created_at,
+               u.username, u.display_name, u.avatar_url,
+               r.title AS recipe_title, r.image_url AS recipe_image, r.difficulty AS recipe_difficulty, r.prep_time_min + r.cook_time_min AS recipe_total_time,
+               st.name AS station_name, st.slug AS station_slug, st.icon AS station_icon,
+               (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS like_count,
+               (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id AND c.is_hidden = 0) AS comment_count
+        FROM community_posts p
+        JOIN users u ON p.user_id = u.id
+        LEFT JOIN recipes r ON p.recipe_id = r.id
+        LEFT JOIN stations st ON p.station_id = st.id
+        {where_clause}
+        ORDER BY p.created_at DESC
+        LIMIT 50;
+    """
+    cursor.execute(sql, params)
+    posts = [dict(row) for row in cursor.fetchall()]
+
+    for p in posts:
+        if current_user:
+            cursor.execute("SELECT id FROM post_likes WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
+            p["is_liked"] = bool(cursor.fetchone())
+        else:
+            p["is_liked"] = False
+
+    conn.close()
+    return jsonify({"posts": posts})
+
+@app.route("/api/posts", methods=["POST"])
+@require_auth
+def create_post():
+    data = request.get_json() or {}
+    content = (data.get("content") or "").strip()
+    if not content:
+        return jsonify({"error": "Validation Error", "message": "Post content cannot be empty"}), 400
+
+    is_clean, err_msg = validate_clean_content(content, "Post Content")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    image_url = (data.get("image_url") or "").strip()
+    recipe_id = data.get("recipe_id")
+    post_type = data.get("post_type") or "post"
+    station_id = data.get("station_id")
+    station_slug = (data.get("station_slug") or "").strip()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if not station_id and station_slug:
+        cursor.execute("SELECT id FROM stations WHERE slug = ?;", (station_slug,))
+        st_row = cursor.fetchone()
+        if st_row:
+            station_id = st_row["id"]
+
+    cursor.execute("""
+        INSERT INTO community_posts (user_id, content, image_url, recipe_id, station_id, post_type)
+        VALUES (?, ?, ?, ?, ?, ?);
+    """, (g.current_user["id"], content, image_url, recipe_id, station_id, post_type))
+    post_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Post published", "post_id": post_id}), 201
+
+@app.route("/api/posts/<int:post_id>", methods=["DELETE"])
+@require_auth
+def delete_post(post_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Security Mitigation: IDOR Protection
+    cursor.execute("SELECT id, user_id FROM community_posts WHERE id = ?;", (post_id,))
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Post not found"}), 404
+
+    if existing["user_id"] != g.current_user["id"] and g.current_user["is_admin"] != 1:
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "You can only delete your own posts"}), 403
+
+    cursor.execute("DELETE FROM community_posts WHERE id = ?;", (post_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Post deleted"})
+
+@app.route("/api/posts/<int:post_id>/like", methods=["POST", "DELETE"])
+@require_auth
+def toggle_post_like(post_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        cursor.execute("""
+            INSERT OR IGNORE INTO post_likes (post_id, user_id)
+            VALUES (?, ?);
+        """, (post_id, g.current_user["id"]))
+        is_liked = True
+    else:
+        cursor.execute("""
+            DELETE FROM post_likes
+            WHERE post_id = ? AND user_id = ?;
+        """, (post_id, g.current_user["id"]))
+        is_liked = False
+
+    cursor.execute("SELECT COUNT(*) AS count FROM post_likes WHERE post_id = ?;", (post_id,))
+    count = cursor.fetchone()["count"]
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "is_liked": is_liked, "like_count": count})
+
+@app.route("/api/posts/<int:post_id>/comments", methods=["GET"])
+def get_post_comments(post_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT c.id, c.post_id, c.user_id, c.comment, c.parent_id, c.reply_to_username, c.created_at,
+               u.username, u.display_name, u.avatar_url
+        FROM post_comments c
+        JOIN users u ON c.user_id = u.id
+        WHERE c.post_id = ? AND c.is_hidden = 0
+        ORDER BY c.created_at ASC;
+    """, (post_id,))
+    comments = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({"comments": comments})
+
+@app.route("/api/posts/<int:post_id>/comments", methods=["POST"])
+@require_auth
+def create_comment(post_id):
+    data = request.get_json() or {}
+    comment_text = (data.get("comment") or "").strip()
+    if not comment_text:
+        return jsonify({"error": "Validation Error", "message": "Comment cannot be empty"}), 400
+
+    is_clean, err_msg = validate_clean_content(comment_text, "Comment")
+    if not is_clean:
+        return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    parent_id = data.get("parent_id")
+    reply_to_username = (data.get("reply_to_username") or "").strip()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO post_comments (post_id, user_id, comment, parent_id, reply_to_username)
+        VALUES (?, ?, ?, ?, ?);
+    """, (post_id, g.current_user["id"], comment_text, parent_id, reply_to_username))
+    comment_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "message": "Comment added",
+        "comment": {
+            "id": comment_id,
+            "post_id": post_id,
+            "user_id": g.current_user["id"],
+            "comment": comment_text,
+            "parent_id": parent_id,
+            "reply_to_username": reply_to_username,
+            "username": g.current_user["username"],
+            "display_name": g.current_user["display_name"],
+            "avatar_url": g.current_user["avatar_url"],
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        }
+    }), 201
+
+@app.route("/api/comments/<int:comment_id>", methods=["DELETE"])
+@require_auth
+def delete_comment(comment_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, user_id FROM post_comments WHERE id = ?;", (comment_id,))
+    comment = cursor.fetchone()
+    if not comment:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Comment not found"}), 404
+
+    if comment["user_id"] != g.current_user["id"] and g.current_user["is_admin"] != 1:
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "You can only delete your own comments"}), 403
+
+    cursor.execute("DELETE FROM post_comments WHERE id = ?;", (comment_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Comment deleted"})
+
+@app.route("/api/reports", methods=["POST"])
+@require_auth
+def submit_report():
+    data = request.get_json() or {}
+    post_id = data.get("post_id")
+    comment_id = data.get("comment_id")
+    reason = (data.get("reason") or "Spam / Inappropriate").strip()
+
+    if not post_id and not comment_id:
+        return jsonify({"error": "Validation Error", "message": "Must report a post or comment"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO post_reports (post_id, comment_id, reported_by, reason)
+        VALUES (?, ?, ?, ?);
+    """, (post_id, comment_id, g.current_user["id"], reason))
+
+    if post_id:
+        cursor.execute("UPDATE community_posts SET report_count = report_count + 1 WHERE id = ?;", (post_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "message": "Report submitted for moderation review"})
+
+@app.route("/api/admin/stats", methods=["GET"])
+@admin_required
+def get_admin_stats():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users;")
+    total_users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM recipes;")
+    total_recipes = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM community_posts;")
+    total_posts = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM post_reports;")
+    total_reports = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM planner;")
+    total_plans = cursor.fetchone()[0]
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "stats": {
+            "total_users": total_users,
+            "total_recipes": total_recipes,
+            "total_posts": total_posts,
+            "total_reports": total_reports,
+            "total_plans": total_plans
+        }
+    })
+
+# Moderation Endpoints (Admin Required)
+@app.route("/api/admin/reports", methods=["GET"])
+@admin_required
+def get_reports():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT r.id, r.post_id, r.comment_id, r.reason, r.created_at,
+               u.username AS reporter_username,
+               p.content AS post_content, p.is_hidden AS post_is_hidden,
+               c.comment AS comment_content
+        FROM post_reports r
+        JOIN users u ON r.reported_by = u.id
+        LEFT JOIN community_posts p ON r.post_id = p.id
+        LEFT JOIN post_comments c ON r.comment_id = c.id
+        ORDER BY r.created_at DESC;
+    """)
+    reports = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({"reports": reports})
+
+@app.route("/api/admin/reports/<int:report_id>/action", methods=["POST"])
+@admin_required
+def act_on_report(report_id):
+    data = request.get_json() or {}
+    action = data.get("action")  # 'hide_post', 'delete_post', 'dismiss'
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM post_reports WHERE id = ?;", (report_id,))
+    report = cursor.fetchone()
+    if not report:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Report not found"}), 404
+
+    if action == "hide_post" and report["post_id"]:
+        cursor.execute("UPDATE community_posts SET is_hidden = 1 WHERE id = ?;", (report["post_id"],))
+    elif action == "delete_post" and report["post_id"]:
+        cursor.execute("DELETE FROM community_posts WHERE id = ?;", (report["post_id"],))
+    elif action == "hide_comment" and report["comment_id"]:
+        cursor.execute("UPDATE post_comments SET is_hidden = 1 WHERE id = ?;", (report["comment_id"],))
+
+    cursor.execute("DELETE FROM post_reports WHERE id = ?;", (report_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": f"Report action '{action}' completed"})
+
+
+# ==============================================================================
+# MEAL PLANNER
+# ==============================================================================
+
+@app.route("/api/planner", methods=["GET"])
+@require_auth
+def get_planner():
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    conditions = ["p.user_id = ?"]
+    params = [g.current_user["id"]]
+
+    if start_date:
+        conditions.append("p.plan_date >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("p.plan_date <= ?")
+        params.append(end_date)
+
+    where_clause = "WHERE " + " AND ".join(conditions)
+
+    cursor.execute(f"""
+        SELECT p.*, 
+               r.title AS recipe_title, 
+               r.image_url AS recipe_image, 
+               r.prep_time_min, 
+               r.cook_time_min,
+               r.servings AS recipe_servings,
+               r.cuisine AS recipe_cuisine,
+               r.difficulty AS recipe_difficulty,
+               r.ingredients_json AS recipe_ingredients,
+               r.tags_json AS recipe_tags
+        FROM planner p
+        LEFT JOIN recipes r ON p.recipe_id = r.id
+        {where_clause}
+        ORDER BY p.plan_date ASC, 
+                 CASE p.meal_type 
+                    WHEN 'breakfast' THEN 1 
+                    WHEN 'lunch' THEN 2 
+                    WHEN 'dinner' THEN 3 
+                    WHEN 'snack' THEN 4 
+                    ELSE 5 
+                 END;
+    """, params)
+    
+    rows = cursor.fetchall()
+    conn.close()
+
+    plans = []
+    for r in rows:
+        item = dict(r)
+        # Parse JSON fields safely
+        if item.get("recipe_ingredients") and isinstance(item["recipe_ingredients"], str):
+            try:
+                item["recipe_ingredients"] = json.loads(item["recipe_ingredients"])
+            except Exception:
+                item["recipe_ingredients"] = []
+        if item.get("recipe_tags") and isinstance(item["recipe_tags"], str):
+            try:
+                item["recipe_tags"] = json.loads(item["recipe_tags"])
+            except Exception:
+                item["recipe_tags"] = []
+        item["recipe_time"] = (item.get("prep_time_min") or 0) + (item.get("cook_time_min") or 0)
+        plans.append(item)
+
+    return jsonify({"planner": plans})
+
+@app.route("/api/planner", methods=["POST"])
+@require_auth
+def add_planner_item():
+    data = request.get_json() or {}
+    plan_date = (data.get("plan_date") or "").strip()
+    meal_type = (data.get("meal_type") or "dinner").strip().lower()
+    recipe_id = data.get("recipe_id")
+    custom_title = (data.get("custom_title") or "").strip()
+    notes = (data.get("notes") or "").strip()
+
+    if not plan_date or not meal_type:
+        return jsonify({"error": "Validation Error", "message": "Plan date and meal type required"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO planner (user_id, plan_date, meal_type, recipe_id, custom_title, notes)
+        VALUES (?, ?, ?, ?, ?, ?);
+    """, (g.current_user["id"], plan_date, meal_type, recipe_id, custom_title, notes))
+    plan_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "plan_id": plan_id, "message": "Meal planned"}), 201
+
+@app.route("/api/planner/<int:plan_id>", methods=["DELETE"])
+@require_auth
+def delete_planner_item(plan_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # Security Mitigation: IDOR Protection
+    cursor.execute("DELETE FROM planner WHERE id = ? AND user_id = ?;", (plan_id, g.current_user["id"]))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Planned meal removed"})
+
+@app.route("/api/planner/grocery-list", methods=["GET"])
+@require_auth
+def get_planner_grocery_list():
+    start_date = request.args.get("start_date")
+    end_date = request.args.get("end_date")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    conditions = ["p.user_id = ?", "p.recipe_id IS NOT NULL"]
+    params = [g.current_user["id"]]
+
+    if start_date:
+        conditions.append("p.plan_date >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("p.plan_date <= ?")
+        params.append(end_date)
+
+    where_clause = "WHERE " + " AND ".join(conditions)
+
+    cursor.execute(f"""
+        SELECT p.plan_date, p.meal_type, r.title AS recipe_title, r.ingredients_json AS ingredients
+        FROM planner p
+        JOIN recipes r ON p.recipe_id = r.id
+        {where_clause}
+        ORDER BY p.plan_date ASC;
+    """, params)
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    categorized = {
+        "Produce": [],
+        "Dairy": [],
+        "Meat": [],
+        "Bakery": [],
+        "Spices": [],
+        "Pantry": []
+    }
+    
+    total_items = 0
+    for row in rows:
+        raw_ings = row["ingredients"]
+        if not raw_ings:
+            continue
+        try:
+            ings_list = json.loads(raw_ings) if isinstance(raw_ings, str) else raw_ings
+        except Exception:
+            ings_list = []
+
+        for ing in ings_list:
+            if isinstance(ing, dict) and ing.get("name"):
+                name = ing.get("name", "").strip()
+                amount = str(ing.get("amount", "")).strip()
+                unit = str(ing.get("unit", "")).strip()
+                cat = ing.get("category", "Pantry")
+                if cat not in categorized:
+                    cat = "Pantry"
+                
+                parts = [p for p in [amount, unit, name] if p]
+                display_str = " ".join(parts)
+                categorized[cat].append({
+                    "name": name,
+                    "amount": amount,
+                    "unit": unit,
+                    "display": display_str,
+                    "recipe_title": row["recipe_title"],
+                    "plan_date": row["plan_date"]
+                })
+                total_items += 1
+
+    return jsonify({
+        "success": True,
+        "start_date": start_date,
+        "end_date": end_date,
+        "total_items": total_items,
+        "categories": categorized
+    })
+
+@app.route("/api/planner/clear-week", methods=["POST"])
+@require_auth
+def clear_planner_week():
+    data = request.get_json() or {}
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    if not start_date or not end_date:
+        return jsonify({"error": "Validation Error", "message": "start_date and end_date required"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        DELETE FROM planner
+        WHERE user_id = ? AND plan_date >= ? AND plan_date <= ?;
+    """, (g.current_user["id"], start_date, end_date))
+    deleted_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+
+    return jsonify({"success": True, "deleted_count": deleted_count, "message": f"Cleared {deleted_count} planned meals"})
+
+
+# ==============================================================================
+# IMAGE UPLOADS WITH SERVER-SIDE PILLOW PROCESSING & TOKENIZATION
+# ==============================================================================
+
+@app.route("/api/upload", methods=["POST"])
+@require_auth
+def upload_image():
+    if "image" not in request.files:
+        return jsonify({"error": "Validation Error", "message": "No image file provided"}), 400
+
+    file = request.files["image"]
+    if not file or file.filename == "":
+        return jsonify({"error": "Validation Error", "message": "Empty file"}), 400
+
+    try:
+        # Verify and sanitize with Pillow
+        image_bytes = file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+
+        # Convert to RGB (handles RGBA / PNG transparency / CMYK)
+        if image.mode in ("RGBA", "P"):
+            rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+            if image.mode == "RGBA":
+                rgb_image.paste(image, mask=image.split()[3])
+            else:
+                rgb_image.paste(image)
+            image = rgb_image
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+
+        # Downsample to max 1280x1280 preserving aspect ratio
+        max_dim = 1280
+        image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+        # Generate secure randomized hex token filename
+        hex_token = secrets.token_hex(16)
+        filename = f"{hex_token}.jpg"
+        save_path = os.path.join(UPLOAD_FOLDER, filename)
+
+        # Save with quality optimization
+        image.save(save_path, format="JPEG", quality=85, optimize=True)
+
+        image_url = f"/uploads/{filename}"
+        return jsonify({"success": True, "url": image_url, "filename": filename})
+    except Exception as e:
+        return jsonify({"error": "Upload Error", "message": f"Failed to process image: {str(e)}"}), 400
+
+
+# ==============================================================================
+# ERROR HANDLERS
+# ==============================================================================
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Not Found", "message": "API endpoint does not exist"}), 404
+    return send_from_directory(app.static_folder, "index.html")
+
+@app.errorhandler(413)
+def request_entity_too_large(e):
+    return jsonify({"error": "Payload Too Large", "message": "Uploaded file exceeds maximum limit"}), 413
+
+@app.errorhandler(500)
+def server_error(e):
+    import traceback
+    traceback.print_exc()
+    original_err = getattr(e, "original_exception", e)
+    return jsonify({"error": "Internal Server Error", "message": str(original_err)}), 500
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5050, debug=True)

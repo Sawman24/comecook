@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cooked — Made for Cooks, By Cooks</title>
+  <meta name="description" content="The premier social culinary platform and digital recipe box. Ask cooking questions, share dish photos, import recipes, plan meals, and manage your kitchen pantry." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍳</text></svg>" />
+</head>
+<body>
+  <div class="app-wrapper">
+    
+    <!-- TOP NAVIGATION BAR -->
+    <header class="navbar">
+      <div class="nav-left">
+        <a class="brand-logo" onclick="navigateTo('feed')">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M18.06 6.13c-.31-.59-.75-1.1-1.28-1.48A4.98 4.98 0 0 0 12 3a4.98 4.98 0 0 0-4.78 3.65c-.53.38-.97.89-1.28 1.48A4.97 4.97 0 0 0 5 11c0 2.22 1.45 4.1 3.48 4.74V18a1 1 0 0 0 1 1h5.04a1 1 0 0 0 1-1v-2.26C17.55 15.1 19 13.22 19 11c0-1.84-.99-3.44-2.44-4.37zM14.52 17h-5.04v-1h5.04v1zm.52-3H8.96c-1.63-.44-2.84-1.92-2.95-3.66.75-.15 1.41-.53 1.9-1.09.83.95 2.05 1.55 3.41 1.55 1.42 0 2.68-.66 3.51-1.68.49.54 1.13.91 1.85 1.07-.1 1.87-1.4 3.42-3.14 3.81zM12 5a3 3 0 0 1 2.82 2.02c-.88.61-1.93.98-3.07.98-1.08 0-2.09-.34-2.94-.91A3.01 3.01 0 0 1 12 5z"/>
+          </svg>
+          <span>Cooked</span>
+        </a>
+        <div class="search-bar-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="global-search-input" placeholder="Search recipes, tips, dishes..." />
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <button class="btn-icon" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">🌙</button>
+        <div id="nav-auth-container">
+          <!-- Populated by auth.js -->
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN 3-COLUMN LAYOUT -->
+    <div class="main-layout">
+      
+      <!-- LEFT NAVIGATION SIDEBAR -->
+      <aside class="sidebar-left">
+        <div class="sidebar-section-title">Culinary Social</div>
+        <a class="nav-item active" data-view="feed" onclick="navigateTo('feed')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+          <span>Community Feed</span>
+        </a>
+        <a class="nav-item" data-view="stations" onclick="navigateTo('stations')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <span>🍳 Kitchen Stations</span>
+        </a>
+        <a class="nav-item" data-view="recipes" onclick="navigateTo('recipes')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+          </svg>
+          <span>Recipe Box</span>
+        </a>
+
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-section-title">Kitchen Tools</div>
+
+        <a class="nav-item" data-view="planner" onclick="navigateTo('planner')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+          <span>Meal Planner</span>
+        </a>
+
+        <!-- ADMIN MODERATION SECTION -->
+        <div id="admin-nav-section" style="display: none;">
+          <div class="sidebar-divider"></div>
+          <div class="sidebar-section-title">Administration</div>
+          <a class="nav-item" data-view="admin" onclick="navigateTo('admin')" style="color: var(--accent);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            <span>🛡️ Moderation</span>
+          </a>
+        </div>
+      </aside>
+
+      <!-- CENTER CONTENT CONTAINER -->
+      <main class="content-area" id="main-content-view">
+        <!-- Rendered dynamically by active view module -->
+      </main>
+
+      <!-- RIGHT SIDEBAR -->
+      <aside class="sidebar-right">
+        <!-- Featured Chefs -->
+        <div class="sidebar-card">
+          <h3>👨‍🍳 Featured Chefs</h3>
+          <div id="featured-chefs-container">
+            <p style="font-size: 0.85rem; color: var(--text-light);">Loading chefs...</p>
+          </div>
+        </div>
+
+        <!-- Daily Chef's Tip -->
+        <div class="sidebar-card" style="background: linear-gradient(135deg, var(--bg-surface), var(--primary-light));">
+          <h3 style="color: var(--primary);">💡 Kitchen Golden Rule</h3>
+          <p style="font-size: 0.85rem; line-height: 1.5; color: var(--text-main);">
+            <b>"Taste as you go!"</b> Adjust seasoning at every stage of cooking, not just at the end. Salt enhances flavor, acid (lemon/vinegar) brightens dull dishes, and fat balances heat.
+          </p>
+        </div>
+
+        <!-- Quick Measurement Conversion Sheet -->
+        <div class="sidebar-card">
+          <h3>📐 Fast Conversions</h3>
+          <ul style="list-style: none; font-size: 0.82rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 0.35rem;">
+            <li>• 1 tbsp = 3 tsp = 15 ml</li>
+            <li>• 1 cup = 16 tbsp = 240 ml</li>
+            <li>• 1 stick butter = 1/2 cup = 113 g</li>
+            <li>• 1 oz = 28.35 grams</li>
+            <li>• 1 lb = 16 oz = 454 grams</li>
+          </ul>
+        </div>
+      </aside>
+    </div>
+
+    <!-- MOBILE BOTTOM NAVIGATION -->
+    <nav class="mobile-bottom-nav">
+      <a class="nav-item" data-view="feed" onclick="navigateTo('feed')">🔥 Feed</a>
+      <a class="nav-item" data-view="stations" onclick="navigateTo('stations')">🍳 Stations</a>
+      <a class="nav-item" data-view="recipes" onclick="navigateTo('recipes')">📖 Recipes</a>
+      <a class="nav-item" data-view="planner" onclick="navigateTo('planner')">📅 Plan</a>
+    </nav>
+  </div>
+
+  <!-- ============================================================================
+       MODALS
+       ============================================================================ -->
+
+  <!-- 1. AUTH MODAL (Login / Register / Forgot) -->
+  <div class="modal-backdrop" id="auth-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="auth-modal-title">Welcome to Cooked</h3>
+        <button class="btn-icon" onclick="closeAuthModal()">✕</button>
+      </div>
+      <div class="modal-body" id="auth-modal-form">
+        <!-- Form rendered by auth.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. CREATE POST MODAL -->
+  <div class="modal-backdrop" id="create-post-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Share with the Culinary Community</h3>
+        <button class="btn-icon" onclick="closeCreateModal()">✕</button>
+      </div>
+      <form onsubmit="handlePostCreateSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Post Type</label>
+            <select id="post-type-select" class="form-control">
+              <option value="post">General Story & Tip</option>
+              <option value="question">Kitchen Question (Ask for advice)</option>
+              <option value="showcase">Dish Photo Showcase</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Kitchen Station (Sub-Community)</label>
+            <select id="post-station-select" class="form-control">
+              <option value="">-- Kitchen Main Feed (No Station) --</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>What's cooking?</label>
+            <textarea id="post-content-input" class="form-control" rows="4" placeholder="Describe your dish, technique, or ask your question..." required></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Attach Recipe from Your Recipe Box (Optional)</label>
+            <select id="post-recipe-select" class="form-control">
+              <option value="">-- No Recipe Attached --</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Upload Dish Photo (Canvas auto-downsampled)</label>
+            <input type="file" id="post-image-file" class="form-control" accept="image/*" onchange="handleImageFileSelected(event)" />
+            <div id="post-image-preview-wrap" style="display: none; margin-top: 0.75rem;">
+              <img id="post-image-preview" src="" style="width: 100%; max-height: 200px; object-fit: cover; border-radius: var(--radius-md);" />
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Publish Post</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 3. RECIPE EDITOR WIZARD MODAL -->
+  <div class="modal-backdrop" id="recipe-editor-modal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 id="editor-modal-title">Write Recipe</h3>
+        <button class="btn-icon" onclick="closeRecipeEditorModal()">✕</button>
+      </div>
+      <form onsubmit="handleRecipeEditorSubmit(event)">
+        <input type="hidden" id="editor-recipe-id" value="" />
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Recipe Title</label>
+            <input type="text" id="editor-title" class="form-control" placeholder="e.g. Grandma's Braised Short Ribs" required />
+          </div>
+
+          <div class="form-group">
+            <label>Description & Story</label>
+            <textarea id="editor-desc" class="form-control" placeholder="A brief background, flavor notes, or history of this recipe..."></textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem;">
+            <div class="form-group">
+              <label>Prep Time (min)</label>
+              <input type="number" id="editor-prep" class="form-control" value="15" min="0" />
+            </div>
+            <div class="form-group">
+              <label>Cook Time (min)</label>
+              <input type="number" id="editor-cook" class="form-control" value="25" min="0" />
+            </div>
+            <div class="form-group">
+              <label>Servings</label>
+              <input type="number" id="editor-servings" class="form-control" value="4" min="1" />
+            </div>
+            <div class="form-group">
+              <label>Difficulty</label>
+              <select id="editor-difficulty" class="form-control">
+                <option value="Easy">Easy</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="Advanced">Advanced</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Cuisine</label>
+              <select id="editor-cuisine" class="form-control">
+                <option value="Italian">Italian</option>
+                <option value="French / Artisan">French / Artisan</option>
+                <option value="American">American</option>
+                <option value="Mexican">Mexican</option>
+                <option value="Asian">Asian</option>
+                <option value="Mediterranean">Mediterranean</option>
+                <option value="Global" selected>Global</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Tags (Comma-separated)</label>
+            <input type="text" id="editor-tags" class="form-control" placeholder="Pasta, ComfortFood, QuickMeals, Weeknight" />
+          </div>
+
+          <div class="form-group">
+            <label>Dish Photo URL (or paste image URL)</label>
+            <input type="url" id="editor-image-url" class="form-control" placeholder="https://..." />
+          </div>
+
+          <!-- Ingredients Section -->
+          <div style="margin-top: 1.5rem; margin-bottom: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <label style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Ingredients</label>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addEditorIngredient()">+ Add Ingredient</button>
+            </div>
+            <div id="editor-ingredients-list"></div>
+          </div>
+
+          <!-- Steps Section -->
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <label style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin: 0;">Step-by-Step Directions</label>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addEditorStep()">+ Add Step</button>
+            </div>
+            <div id="editor-steps-list"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeRecipeEditorModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Recipe</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 4. WEB & TEXT RECIPE SCRAPER MODAL -->
+  <div class="modal-backdrop" id="scraper-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🔗 Import Recipe</h3>
+        <button class="btn-icon" onclick="closeScraperModal()">✕</button>
+      </div>
+      <form onsubmit="handleScrapeSubmit(event)">
+        <div class="modal-body">
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+            <button type="button" id="scraper-tab-url" class="filter-chip active" onclick="setScraperTab('url')">🌐 From Website URL</button>
+            <button type="button" id="scraper-tab-text" class="filter-chip" onclick="setScraperTab('text')">📝 Paste Recipe Text</button>
+          </div>
+
+          <div class="form-group" id="scraper-url-form-group">
+            <label>Recipe Webpage URL</label>
+            <div style="display: flex; gap: 0.5rem;">
+              <input type="url" id="scraper-url-input" class="form-control" placeholder="https://www.allrecipes.com/recipe/..." />
+              <button type="submit" class="btn btn-primary btn-sm">Extract</button>
+            </div>
+          </div>
+
+          <div class="form-group" id="scraper-text-form-group" style="display: none;">
+            <label>Paste Recipe Text / Notes / Email</label>
+            <textarea id="scraper-text-input" class="form-control" rows="6" placeholder="Paste recipe with ingredients and steps here..."></textarea>
+            <button type="submit" class="btn btn-primary btn-sm" style="margin-top: 0.5rem;">Parse & Import</button>
+          </div>
+
+          <div id="scraper-preview-area" style="margin-top: 1rem;"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeScraperModal()">Close</button>
+          <button type="button" id="scraper-save-btn" class="btn btn-primary" style="display: none;" onclick="saveScrapedRecipeToBox()">
+            💾 Save to My Recipe Box
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 5. MEAL PLANNER MODAL -->
+  <div class="modal-backdrop" id="planner-modal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span style="font-size: 1.4rem;">📅</span>
+          <h3 id="planner-modal-title">Schedule a Meal</h3>
+        </div>
+        <button class="btn-icon" onclick="closePlannerModal()">✕</button>
+      </div>
+      <form onsubmit="handleAddPlanSubmit(event)">
+        <div class="modal-body">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label>Date</label>
+              <input type="date" id="plan-date-input" class="form-control" required />
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label>Meal Time</label>
+              <select id="plan-meal-type-select" class="form-control">
+                <option value="breakfast">🌅 Breakfast</option>
+                <option value="lunch">☀️ Lunch</option>
+                <option value="dinner" selected>🌙 Dinner</option>
+                <option value="snack">🍎 Snack</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Tab Selection: Recipe Box vs Custom -->
+          <div class="scraper-tabs" style="margin-bottom: 1rem;">
+            <div class="scraper-tab active" id="plan-tab-box" onclick="setPlanModalTab('box')">
+              📖 Choose from Recipe Box
+            </div>
+            <div class="scraper-tab" id="plan-tab-custom" onclick="setPlanModalTab('custom')">
+              ✏️ Custom Dish / Eating Out
+            </div>
+          </div>
+
+          <!-- Tab 1: Recipe Box Picker -->
+          <div id="plan-section-box">
+            <div class="form-group" style="margin-bottom: 0.5rem;">
+              <input type="text" id="plan-recipe-search" class="form-control" placeholder="🔍 Search your recipes by name, cuisine, tag..." oninput="filterPlannerRecipes(this.value)" />
+            </div>
+            <input type="hidden" id="plan-selected-recipe-id" value="" />
+            <div id="plan-recipe-picker-grid" class="planner-recipe-picker-grid">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <!-- Tab 2: Custom Dish Input -->
+          <div id="plan-section-custom" style="display: none;">
+            <div class="form-group">
+              <label>Custom Dish Title</label>
+              <input type="text" id="plan-custom-title" class="form-control" placeholder="e.g. Leftover Lasagna, Friday Night Pizza, Chef's Table" />
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 1rem; margin-bottom: 0;">
+            <label>Kitchen Prep Notes (Optional)</label>
+            <input type="text" id="plan-notes" class="form-control" placeholder="e.g. Thaw steaks morning of, double the garlic sauce" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closePlannerModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="plan-submit-btn">Add to Calendar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 5B. WEEKLY GROCERY LIST MODAL -->
+  <div class="modal-backdrop" id="planner-grocery-modal">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span style="font-size: 1.4rem;">🛒</span>
+          <div>
+            <h3 style="margin-bottom: 0.15rem;">Weekly Grocery Checklist</h3>
+            <p id="planner-grocery-subtitle" style="font-size: 0.8rem; color: var(--text-muted); margin: 0;">Aggregated ingredients for your planned meals</p>
+          </div>
+        </div>
+        <button class="btn-icon" onclick="closePlannerGroceryModal()">✕</button>
+      </div>
+      <div class="modal-body" style="max-height: 65vh; overflow-y: auto;">
+        <div id="planner-grocery-content">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: space-between;">
+        <span id="planner-grocery-count" style="font-size: 0.85rem; color: var(--text-muted);">0 items</span>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary" onclick="copyGroceryListToClipboard()">📋 Copy Checklist</button>
+          <button class="btn btn-primary" onclick="window.print()">🖨️ Print</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. PROFILE EDIT MODAL -->
+  <div class="modal-backdrop" id="profile-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Edit Chef Profile</h3>
+        <button class="btn-icon" onclick="closeEditProfileModal()">✕</button>
+      </div>
+      <form onsubmit="handleProfileUpdateSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Display Name</label>
+            <input type="text" id="profile-display-input" class="form-control" required />
+          </div>
+          <div class="form-group">
+            <label>Avatar Image URL</label>
+            <input type="url" id="profile-avatar-input" class="form-control" placeholder="https://..." />
+          </div>
+          <div class="form-group">
+            <label>Culinary Bio</label>
+            <textarea id="profile-bio-input" class="form-control" rows="3"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeEditProfileModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Update Profile</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 7. REPORT MODAL -->
+  <div class="modal-backdrop" id="report-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🚩 Report Content</h3>
+        <button class="btn-icon" onclick="closeReportModal()">✕</button>
+      </div>
+      <form onsubmit="handleReportSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Reason for Flagging</label>
+            <select id="report-reason-select" class="form-control">
+              <option value="Spam / Advertisements">Spam / Advertisements</option>
+              <option value="Harassment or Inappropriate Language">Harassment or Inappropriate Language</option>
+              <option value="Dangerous Cooking / Food Safety Violation">Dangerous Cooking / Food Safety Violation</option>
+              <option value="Plagiarism / Stolen Content">Plagiarism / Stolen Content</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <p style="font-size: 0.8rem; color: var(--text-muted);">
+            Our executive moderation team reviews all flagged posts and comments promptly.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeReportModal()">Cancel</button>
+          <button type="submit" class="btn btn-danger">Submit Report</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 8. CREATE KITCHEN STATION MODAL -->
+  <div class="modal-backdrop" id="create-station-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🍳 Open New Kitchen Station</h3>
+        <button class="btn-icon" onclick="closeCreateStationModal()">✕</button>
+      </div>
+      <form onsubmit="handleStationCreateSubmit(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Station Name</label>
+            <input type="text" id="station-create-name" class="form-control" placeholder="e.g. Sourdough & Fermentation" required maxlength="60" />
+          </div>
+
+          <div class="form-group">
+            <label>Station Icon (Emoji)</label>
+            <input type="text" id="station-create-icon" class="form-control" value="🍳" placeholder="🍳, 🥐, 🍝, 🥩, 🌮, 🥗, 🔪, 🍣" maxlength="8" />
+          </div>
+
+          <div class="form-group">
+            <label>Station Mission / Description</label>
+            <textarea id="station-create-desc" class="form-control" rows="3" placeholder="What culinary crafts, dishes, and techniques belong in this station?" required></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Station Hero Banner Image URL (Optional)</label>
+            <input type="url" id="station-create-banner" class="form-control" placeholder="https://images.unsplash.com/..." />
+          </div>
+
+          <div class="form-group">
+            <label>Station Standards & Rules (One per line)</label>
+            <textarea id="station-create-rules" class="form-control" rows="3" placeholder="1. Respect traditional techniques while welcoming innovation&#10;2. Share ingredient ratios and cook times&#10;3. Constructive culinary critique only"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeCreateStationModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Open Station & Clock In</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT MODULE SCRIPTS -->
+  <script src="/js/api.js"></script>
+  <script src="/js/theme.js"></script>
+  <script src="/js/lightbox.js"></script>
+  <script src="/js/auth.js"></script>
+  <script src="/js/recipes.js"></script>
+  <script src="/js/scraper.js"></script>
+  <script src="/js/community.js"></script>
+  <script src="/js/stations.js"></script>
+  <script src="/js/planner.js"></script>
+  <script src="/js/admin.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

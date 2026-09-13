@@ -1,0 +1,61 @@
+version: "3.8"
+
+services:
+  cooked-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cooked-app
+    restart: unless-stopped
+    expose:
+      - "5050"
+    environment:
+      - COOKED_ENV=production
+      - SECRET_KEY=${SECRET_KEY}
+      - COOKED_DB_PATH=/app/data/cooked.db
+      - UPLOAD_FOLDER=/app/uploads
+      - ADMIN_USERNAMES=${ADMIN_USERNAMES:-}
+      - COOKED_SEED_DEMO=${COOKED_SEED_DEMO:-0}
+    volumes:
+      - cooked-data:/app/data
+      - cooked-uploads:/app/uploads
+    networks:
+      - cooked-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cooked-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - cooked-net
+    depends_on:
+      - cooked-app
+
+volumes:
+  cooked-data:
+    name: cooked-data
+  cooked-uploads:
+    name: cooked-uploads
+  caddy-data:
+    name: cooked-caddy-data
+  caddy-config:
+    name: cooked-caddy-config
+
+networks:
+  cooked-net:
+    name: cooked-network
