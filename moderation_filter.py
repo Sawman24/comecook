@@ -220,9 +220,18 @@ def contains_profanity(text: str) -> tuple[bool, str | None]:
     # 2. Check Severe Slurs & Hate Speech (ZERO TOLERANCE across any variant or substring)
     for slur in SEVERE_SLURS_AND_HATE_SPEECH:
         clean_slur = re.sub(r'[^a-z0-9]', '', slur)
-        for s in all_eval_strings:
-            if clean_slur in s or slur in s:
-                return (True, slur)
+        # Only do raw substring matching when the cleaned form is >= 3 chars.
+        # Short cleaned forms (e.g. "f@g" → "fg", 2 chars) create catastrophic
+        # false positives matching inside legitimate tokens like "chefg...".
+        # For short slurs, fall back to word-boundary matching on the original form.
+        if len(clean_slur) < 3:
+            for s in all_eval_strings:
+                if re.search(r'\b' + re.escape(slur) + r'\b', s, re.IGNORECASE):
+                    return (True, slur)
+        else:
+            for s in all_eval_strings:
+                if clean_slur in s or slur in s:
+                    return (True, slur)
 
     # 3. Check Extremist, Supremacist & Slavery Terms
     STRICT_HATE_SUBSTRINGS = ["kkk", "nazi", "hitler", "swastika", "slave", "slavery", "lynch", "whitepower", "siegheil", "klan"]
