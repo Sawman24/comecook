@@ -26,14 +26,63 @@ def get_db_connection():
     return conn
 
 
+def check_and_recover_db(db_path: str = None):
+    """If database file is corrupted on disk, safely back it up and allow clean recreation."""
+    if db_path is None:
+        db_path = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", DB_PATH))
+    if not os.path.exists(db_path):
+        return
+    try:
+        test_conn = sqlite3.connect(db_path, timeout=3.0)
+        cursor = test_conn.cursor()
+        cursor.execute("PRAGMA quick_check;")
+        res = cursor.fetchone()
+        test_conn.close()
+        if res and res[0] != "ok":
+            raise sqlite3.DatabaseError(f"PRAGMA quick_check failed: {res[0]}")
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "malformed" in err_msg or "corrupt" in err_msg or "quick_check" in err_msg or "disk image" in err_msg:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{db_path}.corrupted_{timestamp}"
+            try:
+                if os.path.exists(db_path):
+                    os.rename(db_path, backup_path)
+                for ext in ["-wal", "-shm", "-journal"]:
+                    extra = db_path + ext
+                    if os.path.exists(extra):
+                        try:
+                            os.remove(extra)
+                        except OSError:
+                            pass
+                print(f"[DATABASE RECOVERY] Malformed database disk image detected! Backed up to {backup_path} and recreated clean database.")
+            except Exception as recover_err:
+                print(f"[DATABASE RECOVERY] Failed to move malformed database: {recover_err}")
+
 
 def init_db():
-    """Initialize database schema with tables and indexes."""
+    """Initialize database schema with tables and indexes, with automatic corruption recovery."""
+    db_path = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", DB_PATH))
+    check_and_recover_db(db_path)
     try:
         from auth import reset_auth_caches
         reset_auth_caches()
     except Exception:
         pass
+
+    try:
+        _run_init_db_schema()
+    except sqlite3.DatabaseError as e:
+        err_msg = str(e).lower()
+        if "malformed" in err_msg or "corrupt" in err_msg or "disk image" in err_msg:
+            print(f"[DATABASE ERROR] Database error during init: {e}. Attempting auto-recovery...")
+            check_and_recover_db(db_path)
+            _run_init_db_schema()
+        else:
+            raise
+
+
+def _run_init_db_schema():
     conn = get_db_connection()
     cursor = conn.cursor()
 
