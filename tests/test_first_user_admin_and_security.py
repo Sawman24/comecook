@@ -95,5 +95,34 @@ class FirstUserAdminAndSecurityTestCase(unittest.TestCase):
         self.assertEqual(user2_db["is_admin"], 0)
         conn.close()
 
+    def test_05_admin_user_deletion_and_moderation(self):
+        """Verify admin can list and permanently delete user accounts."""
+        # Login as owner admin
+        self.client.post("/api/auth/login", json={
+            "username": "executive_chef_owner",
+            "password": "StrongOwnerPassword2026!"
+        })
+
+        # List users as admin
+        users_res = self.client.get("/api/admin/users")
+        self.assertEqual(users_res.status_code, 200)
+        users = users_res.get_json()["users"]
+        self.assertTrue(len(users) >= 2)
+
+        sam_user = next((u for u in users if u["username"] == "line_cook_sam"), None)
+        self.assertIsNotNone(sam_user)
+
+        # Delete user
+        del_res = self.client.delete(f"/api/admin/users/{sam_user['id']}")
+        self.assertEqual(del_res.status_code, 200)
+        self.assertTrue(del_res.get_json()["success"])
+
+        # Verify user is deleted
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM users WHERE id = ?;", (sam_user["id"],))
+        self.assertIsNone(cursor.fetchone())
+        conn.close()
+
 if __name__ == "__main__":
     unittest.main()

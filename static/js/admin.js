@@ -3,6 +3,7 @@
    ============================================================================== */
 
 let currentAdminReports = [];
+let adminUserSearchDebounce = null;
 
 async function loadAdminDashboardView() {
   if (!currentUser || currentUser.is_admin !== 1) {
@@ -29,7 +30,7 @@ async function loadAdminDashboardView() {
             <span>🛡️</span> Kitchen Command & Moderation Center
           </h2>
           <p style="color: var(--text-muted); font-size: 0.88rem; margin: 0;">
-            Platform health, live metrics, and real-time community report moderation
+            Platform health, live metrics, user administration, and community moderation
           </p>
         </div>
         <div style="display: flex; gap: 0.5rem;">
@@ -68,7 +69,7 @@ async function loadAdminDashboardView() {
     </div>
 
     <!-- Flagged Reports Queue -->
-    <div class="card" style="background: var(--bg-surface); padding: 1.25rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+    <div class="card" style="background: var(--bg-surface); padding: 1.25rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); margin-bottom: 1.5rem;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border-color);">
         <h3 style="font-size: 1.15rem; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
           <span>🚩</span> Flagged Content Review Queue
@@ -82,12 +83,33 @@ async function loadAdminDashboardView() {
         </div>
       </div>
     </div>
+
+    <!-- Registered Users & Member Management Section -->
+    <div class="card" style="background: var(--bg-surface); padding: 1.25rem; border: 1px solid var(--border-color); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h3 style="font-size: 1.15rem; margin: 0; display: flex; align-items: center; gap: 0.45rem;">
+            <span>👥</span> Community Member & User Moderation
+          </h3>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.2rem 0 0 0;">Inspect accounts, view emails, and remove bad actors</p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="text" id="admin-user-search-input" class="form-control" style="font-size: 0.85rem; padding: 0.35rem 0.75rem; width: 220px;" placeholder="Search username, email..." oninput="handleAdminUserSearch(this.value)" />
+        </div>
+      </div>
+      <div id="admin-users-list">
+        <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+          Loading registered users...
+        </div>
+      </div>
+    </div>
   `;
 
-  // Fetch stats and reports in parallel
+  // Fetch stats, reports, and users in parallel
   await Promise.all([
     fetchAdminStats(),
-    fetchAdminReports()
+    fetchAdminReports(),
+    fetchAdminUsers()
   ]);
 }
 
@@ -180,6 +202,102 @@ async function fetchAdminReports() {
   }
 }
 
+function handleAdminUserSearch(query) {
+  clearTimeout(adminUserSearchDebounce);
+  adminUserSearchDebounce = setTimeout(() => {
+    fetchAdminUsers(query);
+  }, 250);
+}
+
+async function fetchAdminUsers(query = "") {
+  const container = document.getElementById("admin-users-list");
+  if (!container) return;
+
+  try {
+    let url = "/api/admin/users";
+    if (query) url += `?q=${encodeURIComponent(query)}`;
+    const data = await apiRequest(url);
+    const users = data.users || [];
+
+    if (users.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+          No users found matching "${escapeHtml(query)}"
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = `
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.88rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-light); font-size: 0.75rem; text-transform: uppercase;">
+              <th style="padding: 0.6rem 0.75rem;">User</th>
+              <th style="padding: 0.6rem 0.75rem;">Email</th>
+              <th style="padding: 0.6rem 0.75rem;">Role</th>
+              <th style="padding: 0.6rem 0.75rem;">Content Stats</th>
+              <th style="padding: 0.6rem 0.75rem;">Joined</th>
+              <th style="padding: 0.6rem 0.75rem; text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${users.map(u => {
+              const isSelf = currentUser && currentUser.id === u.id;
+              return `
+                <tr style="border-bottom: 1px solid var(--border-subtle);">
+                  <td style="padding: 0.75rem;">
+                    <div style="display: flex; align-items: center; gap: 0.6rem;">
+                      <img src="${escapeHtml(u.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" style="width: 32px; height: 32px; border-radius: 50%;" />
+                      <div>
+                        <div style="font-weight: 700; color: var(--text-main); cursor: pointer;" onclick="openUserProfile('${escapeHtml(u.username)}')">${escapeHtml(u.display_name || u.username)}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-light);">@${escapeHtml(u.username)}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style="padding: 0.75rem; color: var(--text-muted); font-size: 0.82rem;">${escapeHtml(u.email || '-')}</td>
+                  <td style="padding: 0.75rem;">
+                    ${u.is_admin ? '<span class="badge badge-primary">Admin</span>' : '<span class="badge badge-secondary">Member</span>'}
+                  </td>
+                  <td style="padding: 0.75rem; color: var(--text-muted); font-size: 0.82rem;">
+                    ${u.recipe_count} recipes • ${u.post_count} posts
+                  </td>
+                  <td style="padding: 0.75rem; color: var(--text-light); font-size: 0.8rem;">
+                    ${new Date(u.created_at).toLocaleDateString()}
+                  </td>
+                  <td style="padding: 0.75rem; text-align: right;">
+                    ${!isSelf ? `
+                      <button class="btn btn-danger btn-sm" style="padding: 3px 8px; font-size: 0.78rem;" onclick="adminRemoveUserDirect(${u.id}, '${escapeHtml(u.username)}')">
+                        🗑️ Remove User
+                      </button>
+                    ` : '<span style="font-size: 0.78rem; color: var(--text-light);">(You)</span>'}
+                  </td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    container.innerHTML = `<div style="text-align: center; padding: 2rem; color: var(--danger);">Error loading users: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function adminRemoveUserDirect(userId, username) {
+  if (!confirm(`Are you sure you want to PERMANENTLY REMOVE @${username}?\n\nThis will immediately delete their account, profile, recipes, posts, and comments.`)) {
+    return;
+  }
+
+  try {
+    const res = await apiRequest(`/api/admin/users/${userId}`, { method: "DELETE" });
+    showToast(res.message || `User @${username} removed`, "success");
+    loadAdminDashboardView();
+  } catch (err) {
+    showToast("Error deleting user: " + err.message, "error");
+  }
+}
+
 async function executeReportAction(reportId, action) {
   try {
     const res = await apiRequest(`/api/admin/reports/${reportId}/action`, {
@@ -206,4 +324,5 @@ async function purgeOffensiveAccounts() {
     showToast("Error during purge: " + err.message, "error");
   }
 }
+
 

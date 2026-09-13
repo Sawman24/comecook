@@ -238,11 +238,20 @@ async function openUserProfile(username) {
           <div>
             ${isMe ? `
               <button class="btn btn-secondary btn-sm" onclick="openEditProfileModal()">✏️ Edit Profile</button>
-            ` : (currentUser ? `
-              <button class="btn ${stats.is_following ? 'btn-secondary' : 'btn-primary'} btn-sm" onclick="toggleFollowUser(${user.id}, this)">
-                ${stats.is_following ? 'Following' : '+ Follow Chef'}
-              </button>
-            ` : '')}
+            ` : `
+              <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                ${currentUser ? `
+                  <button class="btn ${stats.is_following ? 'btn-secondary' : 'btn-primary'} btn-sm" onclick="toggleFollowUser(${user.id}, this)">
+                    ${stats.is_following ? 'Following' : '+ Follow Chef'}
+                  </button>
+                ` : ''}
+                ${currentUser && currentUser.is_admin === 1 ? `
+                  <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="adminRemoveUserFromProfile(${user.id}, '${escapeHtml(user.username)}')">
+                    🛡️ Remove User (Admin)
+                  </button>
+                ` : ''}
+              </div>
+            `}
           </div>
         </div>
       </div>
@@ -295,6 +304,20 @@ async function handleProfileUpdateSubmit(e) {
     openUserProfile(currentUser.username);
   } catch (err) {
     showToast("Error updating profile: " + err.message, "error");
+  }
+}
+
+async function adminRemoveUserFromProfile(userId, username) {
+  if (!confirm(`Are you sure you want to PERMANENTLY REMOVE @${username}?\n\nThis will immediately delete their account, profile, recipes, posts, and comments.`)) {
+    return;
+  }
+
+  try {
+    const res = await apiRequest(`/api/admin/users/${userId}`, { method: "DELETE" });
+    showToast(res.message || `User @${username} removed`, "success");
+    navigateTo("feed");
+  } catch (err) {
+    showToast("Error deleting user: " + err.message, "error");
   }
 }
 

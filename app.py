@@ -1473,6 +1473,42 @@ def act_on_report(report_id):
     conn.close()
     return jsonify({"success": True, "message": f"Report action '{action}' completed"})
 
+@app.route("/api/admin/users", methods=["GET"])
+@admin_required
+def admin_get_users():
+    query = (request.args.get("q") or "").strip()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if query:
+        clean_q = query.lstrip("@").strip()
+        search_param = f"%{clean_q}%"
+        cursor.execute("""
+            SELECT u.id, u.username, u.display_name, u.email, u.avatar_url, u.bio, u.is_admin, u.is_active, u.created_at,
+                   (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id) AS recipe_count,
+                   (SELECT COUNT(*) FROM community_posts cp WHERE cp.user_id = u.id) AS post_count,
+                   (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
+            FROM users u
+            WHERE u.username LIKE ? OR u.display_name LIKE ? OR u.email LIKE ?
+            ORDER BY u.id DESC
+            LIMIT 50;
+        """, (search_param, search_param, search_param))
+    else:
+        cursor.execute("""
+            SELECT u.id, u.username, u.display_name, u.email, u.avatar_url, u.bio, u.is_admin, u.is_active, u.created_at,
+                   (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id) AS recipe_count,
+                   (SELECT COUNT(*) FROM community_posts cp WHERE cp.user_id = u.id) AS post_count,
+                   (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
+            FROM users u
+            ORDER BY u.id DESC
+            LIMIT 50;
+        """)
+
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({"users": users})
+
+
 @app.route("/api/admin/users/<int:target_user_id>", methods=["DELETE"])
 @admin_required
 def admin_delete_user(target_user_id):
