@@ -14,13 +14,28 @@ services:
     ports:
       - "${HOST_PORT:-${PORT:-8080}}:5050"
     environment:
-      - COOKED_ENV=production
+      - COOKED_ENV=${COOKED_ENV:-production}
       - SECRET_KEY=${SECRET_KEY:-changeme_use_secure_random_key}
       - COOKED_DB_PATH=/app/data/cooked.db
       - UPLOAD_FOLDER=/app/uploads
       - ADMIN_USERNAMES=${ADMIN_USERNAMES:-}
       - COOKED_SEED_DEMO=${COOKED_SEED_DEMO:-0}
       - PORT=5050
+      - DOMAIN=${DOMAIN:-comecook.app}
+      - APP_URL=${APP_URL:-https://comecook.app}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-0}
+      # Transactional Email (Gmail / SMTP)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_USERNAME=${SMTP_USERNAME:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-1}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-0}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Cooked}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}
+      - EMAIL_FROM=${EMAIL_FROM:-}
     volumes:
       - cooked-data:/app/data
       - cooked-uploads:/app/uploads
