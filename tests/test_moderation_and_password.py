@@ -114,7 +114,9 @@ class ModerationAndPasswordTestCase(unittest.TestCase):
             ("1350_chef", "Pro Baker"),
             ("chef_leo", "13%=50%"),
             ("1488_baker", "Baker 88"),
-            ("kkk_member", "Sous Chef")
+            ("kkk_member", "Sous Chef"),
+            ("BlGBLACNlggзrDlCK", "Offensive User"),
+            ("chef_bad", "BlGBLACNlggзrDlCK")
         ]
         for username, display_name in offensive_candidates:
             res = self.client.post("/api/auth/register", json={

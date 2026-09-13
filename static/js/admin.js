@@ -32,9 +32,14 @@ async function loadAdminDashboardView() {
             Platform health, live metrics, and real-time community report moderation
           </p>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="loadAdminDashboardView()">
-          🔄 Refresh Queue
-        </button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="purgeOffensiveAccounts()">
+            🧹 Purge Offensive Accounts
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="loadAdminDashboardView()">
+            🔄 Refresh Queue
+          </button>
+        </div>
       </div>
 
       <!-- Platform Overview Stats Cards -->
@@ -187,3 +192,18 @@ async function executeReportAction(reportId, action) {
     showToast("Error processing report: " + err.message, "error");
   }
 }
+
+async function purgeOffensiveAccounts() {
+  if (!confirm("Are you sure you want to scan and purge all accounts containing profanity, slurs, or evasion handles?")) {
+    return;
+  }
+
+  try {
+    const res = await apiRequest("/api/admin/users/purge-offensive", { method: "POST" });
+    showToast(res.message || "Purge complete", "info");
+    loadAdminDashboardView();
+  } catch (err) {
+    showToast("Error during purge: " + err.message, "error");
+  }
+}
+

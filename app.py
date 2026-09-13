@@ -1473,6 +1473,56 @@ def act_on_report(report_id):
     conn.close()
     return jsonify({"success": True, "message": f"Report action '{action}' completed"})
 
+@app.route("/api/admin/users/<int:target_user_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_user(target_user_id):
+    current_user = get_authenticated_user()
+    if current_user["id"] == target_user_id:
+        return jsonify({"error": "Forbidden", "message": "Cannot delete your own admin account"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, is_admin FROM users WHERE id = ?;", (target_user_id,))
+    target = cursor.fetchone()
+    if not target:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "User not found"}), 404
+
+    cursor.execute("DELETE FROM users WHERE id = ?;", (target_user_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": f"User @{target['username']} has been permanently removed"})
+
+@app.route("/api/admin/users/purge-offensive", methods=["POST"])
+@admin_required
+def admin_purge_offensive_users():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, display_name, bio, is_admin FROM users WHERE is_admin = 0;")
+    users = cursor.fetchall()
+    purged = []
+
+    for u in users:
+        has_prof_u, term_u = contains_profanity(u["username"])
+        has_prof_d, term_d = contains_profanity(u["display_name"])
+        has_prof_b, term_b = contains_profanity(u["bio"] or "")
+        if has_prof_u or has_prof_d or has_prof_b:
+            cursor.execute("DELETE FROM users WHERE id = ?;", (u["id"],))
+            purged.append({
+                "id": u["id"],
+                "username": u["username"],
+                "reason": term_u or term_d or term_b
+            })
+
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "success": True,
+        "purged_count": len(purged),
+        "purged_users": purged,
+        "message": f"Purged {len(purged)} offensive accounts."
+    })
+
 
 # ==============================================================================
 # MEAL PLANNER
