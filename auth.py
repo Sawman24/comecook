@@ -12,7 +12,7 @@ MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_WINDOW_MINUTES = 5
 
 ADMIN_USERNAMES = [
-    u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "headchef,admin").split(",") if u.strip()
+    u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "headchef,admin,sawyer").split(",") if u.strip()
 ]
 
 import re

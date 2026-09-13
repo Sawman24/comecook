@@ -49,6 +49,8 @@ def apply_security_headers(response):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.path.startswith("/js/") or request.path.startswith("/css/") or request.path == "/":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     if is_request_secure():
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     return response
