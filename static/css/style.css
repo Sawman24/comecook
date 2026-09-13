@@ -2395,40 +2395,51 @@ textarea.form-control {
 }
 
 /* ==============================================================================
-   PROFILE AVATAR UPLOAD COMPONENT
+   PROFILE AVATAR UPLOAD & LINK COMPONENT
    ============================================================================== */
 .avatar-edit-section {
-  margin-bottom: 1.25rem;
-}
-
-.avatar-edit-container {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 1.25rem;
-  padding: 1rem;
+  margin-bottom: 1.5rem;
+  padding: 1.25rem;
   background-color: var(--bg-surface-subtle);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  margin-bottom: 0.5rem;
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.avatar-edit-section > label {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.85rem;
+  align-self: flex-start;
+}
+
+.avatar-edit-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
 }
 
 .avatar-edit-preview-wrap {
   position: relative;
-  width: 76px;
-  height: 76px;
-  flex-shrink: 0;
+  width: 90px;
+  height: 90px;
   border-radius: var(--radius-full);
   overflow: hidden;
-  box-shadow: var(--shadow-sm);
-  border: 2.5px solid var(--primary);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  border: 3px solid var(--primary);
   background-color: var(--bg-surface);
   cursor: pointer;
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .avatar-edit-preview-wrap:hover {
-  transform: scale(1.03);
-  box-shadow: 0 4px 12px rgba(224, 86, 36, 0.25);
+  transform: scale(1.04);
+  box-shadow: 0 6px 18px rgba(224, 86, 36, 0.3);
 }
 
 .avatar-edit-img {
@@ -2451,59 +2462,91 @@ textarea.form-control {
   opacity: 0;
   transition: opacity var(--transition-fast);
   color: #ffffff;
-  font-size: 1.4rem;
+  font-size: 1.5rem;
 }
 
 .avatar-edit-preview-wrap:hover .avatar-upload-overlay {
   opacity: 1;
 }
 
-.avatar-edit-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  flex: 1;
-}
-
-.avatar-action-btns {
+.avatar-header-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.avatar-mode-pills {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  justify-content: center;
+  width: 100%;
+}
+
+.avatar-mode-pills .filter-chip {
+  flex: 1;
+  max-width: 180px;
+  text-align: center;
+  font-size: 0.82rem;
+  padding: 0.45rem 0.75rem;
+}
+
+.avatar-mode-panel {
+  width: 100%;
+}
+
+.btn-block-upload {
+  width: 100%;
+  padding: 0.65rem 1rem;
+  font-weight: 600;
+  display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: var(--radius-md);
 }
 
 .avatar-upload-hint {
   font-size: 0.78rem;
   color: var(--text-muted);
+  margin-top: 0.4rem;
 }
 
 .avatar-uploading-indicator {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  font-size: 0.82rem;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
   color: var(--primary);
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.avatar-url-input-row {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.avatar-url-input-row .form-control {
+  flex: 1;
+}
+
+.avatar-url-status-msg {
+  font-size: 0.8rem;
+  margin-top: 0.4rem;
+  min-height: 1.2rem;
+  text-align: left;
+}
+
+.avatar-url-status-msg.success {
+  color: var(--success, #28a745);
   font-weight: 500;
 }
 
-.avatar-url-toggle-wrap {
-  margin-top: 0.25rem;
-}
-
-.btn-link-toggle {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  padding: 0.2rem 0;
+.avatar-url-status-msg.error {
+  color: var(--danger, #dc3545);
   font-weight: 500;
-  transition: color var(--transition-fast);
-}
-
-.btn-link-toggle:hover {
-  color: var(--primary);
-  text-decoration: underline;
 }
 
 .btn-outline.text-danger {

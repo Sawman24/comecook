@@ -272,6 +272,41 @@ async function openUserProfile(username) {
 
 const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100";
 let isAvatarUploading = false;
+let currentAvatarTab = "upload";
+
+function setAvatarEditMode(mode) {
+  currentAvatarTab = mode;
+  const tabUpload = document.getElementById("avatar-tab-upload");
+  const tabUrl = document.getElementById("avatar-tab-url");
+  const panelUpload = document.getElementById("avatar-panel-upload");
+  const panelUrl = document.getElementById("avatar-panel-url");
+
+  if (mode === "upload") {
+    tabUpload?.classList.add("active");
+    tabUrl?.classList.remove("active");
+    if (panelUpload) panelUpload.style.display = "block";
+    if (panelUrl) panelUrl.style.display = "none";
+  } else {
+    tabUpload?.classList.remove("active");
+    tabUrl?.classList.add("active");
+    if (panelUpload) panelUpload.style.display = "none";
+    if (panelUrl) panelUrl.style.display = "block";
+    const urlInput = document.getElementById("profile-avatar-input");
+    if (urlInput && urlInput.value) {
+      handleProfileAvatarUrlInput(urlInput.value);
+    }
+  }
+}
+
+function triggerProfileAvatarUpload() {
+  if (currentAvatarTab === "upload") {
+    const fileInput = document.getElementById("profile-avatar-file-input");
+    if (fileInput) fileInput.click();
+  } else {
+    const urlInput = document.getElementById("profile-avatar-input");
+    if (urlInput) urlInput.focus();
+  }
+}
 
 function openEditProfileModal() {
   if (!currentUser) return;
@@ -281,8 +316,10 @@ function openEditProfileModal() {
   const currentAvatar = currentUser.avatar_url || "";
   document.getElementById("profile-display-input").value = currentUser.display_name || "";
   document.getElementById("profile-avatar-input").value = currentAvatar;
-  document.getElementById("profile-avatar-preview").src = currentAvatar || DEFAULT_AVATAR;
   document.getElementById("profile-bio-input").value = currentUser.bio || "";
+
+  const preview = document.getElementById("profile-avatar-preview");
+  if (preview) preview.src = currentAvatar || DEFAULT_AVATAR;
 
   const removeBtn = document.getElementById("profile-avatar-remove-btn");
   if (removeBtn) {
@@ -292,13 +329,21 @@ function openEditProfileModal() {
   const spinner = document.getElementById("profile-avatar-uploading-spinner");
   if (spinner) spinner.style.display = "none";
 
-  const urlContainer = document.getElementById("avatar-url-input-container");
-  if (urlContainer) urlContainer.style.display = "none";
-  const urlToggleText = document.getElementById("avatar-url-toggle-text");
-  if (urlToggleText) urlToggleText.textContent = "Or paste image URL ▼";
+  const statusEl = document.getElementById("avatar-url-status");
+  if (statusEl) {
+    statusEl.textContent = "";
+    statusEl.className = "avatar-url-status-msg";
+  }
 
   const fileInput = document.getElementById("profile-avatar-file-input");
   if (fileInput) fileInput.value = "";
+
+  // If user currently has an external http link, default to URL tab; otherwise default to upload tab
+  if (currentAvatar.startsWith("http://") || (currentAvatar.startsWith("https://") && !currentAvatar.includes("/uploads/"))) {
+    setAvatarEditMode("url");
+  } else {
+    setAvatarEditMode("upload");
+  }
 
   modal.classList.add("show");
 }
@@ -308,29 +353,56 @@ function closeEditProfileModal() {
   if (modal) modal.classList.remove("show");
 }
 
-function toggleAvatarUrlInput() {
-  const container = document.getElementById("avatar-url-input-container");
-  const toggleText = document.getElementById("avatar-url-toggle-text");
-  if (!container) return;
-
-  const isHidden = container.style.display === "none";
-  container.style.display = isHidden ? "block" : "none";
-  if (toggleText) {
-    toggleText.textContent = isHidden ? "Hide image URL input ▲" : "Or paste image URL ▼";
-  }
+let urlInputDebounceTimer = null;
+function handleProfileAvatarUrlInput(val) {
+  clearTimeout(urlInputDebounceTimer);
+  urlInputDebounceTimer = setTimeout(() => {
+    applyAvatarUrlFromInput(val);
+  }, 350);
 }
 
-function handleProfileAvatarUrlInput(val) {
-  const trimmed = (val || "").trim();
+function applyAvatarUrlFromInput(explicitVal) {
+  const inputEl = document.getElementById("profile-avatar-input");
+  const val = (explicitVal !== undefined ? explicitVal : (inputEl?.value || "")).trim();
   const preview = document.getElementById("profile-avatar-preview");
   const removeBtn = document.getElementById("profile-avatar-remove-btn");
+  const statusEl = document.getElementById("avatar-url-status");
 
-  if (preview) {
-    preview.src = trimmed || DEFAULT_AVATAR;
+  if (!val) {
+    if (preview) preview.src = DEFAULT_AVATAR;
+    if (removeBtn) removeBtn.style.display = "none";
+    if (statusEl) {
+      statusEl.textContent = "";
+      statusEl.className = "avatar-url-status-msg";
+    }
+    return;
   }
-  if (removeBtn) {
-    removeBtn.style.display = trimmed ? "inline-block" : "none";
+
+  if (!val.startsWith("http://") && !val.startsWith("https://") && !val.startsWith("/uploads/")) {
+    if (statusEl) {
+      statusEl.textContent = "⚠️ Please enter a valid URL starting with http:// or https://";
+      statusEl.className = "avatar-url-status-msg error";
+    }
+    return;
   }
+
+  // Test loading the image before applying
+  const testImg = new Image();
+  testImg.onload = () => {
+    if (preview) preview.src = val;
+    if (removeBtn) removeBtn.style.display = "inline-block";
+    if (statusEl) {
+      statusEl.textContent = "✓ Image link loaded successfully!";
+      statusEl.className = "avatar-url-status-msg success";
+    }
+  };
+  testImg.onerror = () => {
+    if (statusEl) {
+      statusEl.textContent = "⚠️ Could not load image from this URL. Make sure it is a direct, public image link.";
+      statusEl.className = "avatar-url-status-msg error";
+    }
+  };
+  testImg.src = val;
 }
 
 function removeProfileAvatar() {
@@ -338,13 +410,18 @@ function removeProfileAvatar() {
   const preview = document.getElementById("profile-avatar-preview");
   const removeBtn = document.getElementById("profile-avatar-remove-btn");
   const fileInput = document.getElementById("profile-avatar-file-input");
+  const statusEl = document.getElementById("avatar-url-status");
 
   if (avatarInput) avatarInput.value = "";
   if (fileInput) fileInput.value = "";
   if (preview) preview.src = DEFAULT_AVATAR;
   if (removeBtn) removeBtn.style.display = "none";
+  if (statusEl) {
+    statusEl.textContent = "";
+    statusEl.className = "avatar-url-status-msg";
+  }
 
-  showToast("Photo removed. Click Update Profile to save changes.", "info");
+  showToast("Profile photo removed. Click Update Profile to save changes.", "info");
 }
 
 async function handleProfileAvatarFileSelect(input) {
@@ -356,6 +433,7 @@ async function handleProfileAvatarFileSelect(input) {
   const removeBtn = document.getElementById("profile-avatar-remove-btn");
   const saveBtn = document.getElementById("profile-save-btn");
   const avatarInput = document.getElementById("profile-avatar-input");
+  const statusEl = document.getElementById("avatar-url-status");
 
   try {
     isAvatarUploading = true;
@@ -367,9 +445,9 @@ async function handleProfileAvatarFileSelect(input) {
       preview.src = URL.createObjectURL(file);
     }
 
-    showToast("Processing and optimizing profile photo...", "info", 1500);
+    showToast("Optimizing & uploading photo...", "info", 1500);
 
-    // Downsample client-side to max 800x800 JPEG for fast network upload
+    // Downsample client-side to max 800x800 JPEG for fast upload
     const blob = await downsampleImageFile(file, 800, 800);
 
     const formData = new FormData();
@@ -384,6 +462,10 @@ async function handleProfileAvatarFileSelect(input) {
       if (avatarInput) avatarInput.value = res.url;
       if (preview) preview.src = res.url;
       if (removeBtn) removeBtn.style.display = "inline-block";
+      if (statusEl) {
+        statusEl.textContent = "";
+        statusEl.className = "avatar-url-status-msg";
+      }
       showToast("Profile photo uploaded! Click Update Profile to save.", "success");
     }
   } catch (err) {
@@ -420,6 +502,7 @@ async function handleProfileUpdateSubmit(e) {
     showToast("Error updating profile: " + err.message, "error");
   }
 }
+
 
 
 async function adminRemoveUserFromProfile(userId, username) {
