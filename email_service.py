@@ -33,7 +33,16 @@ def get_smtp_config():
     else:
         use_ssl = (port == 465)
 
-    from_addr = os.environ.get("EMAIL_FROM", os.environ.get("MAIL_DEFAULT_SENDER", "Cooked <noreply@comecook.net>")).strip()
+    from_name = os.environ.get("SMTP_FROM_NAME", "Cooked").strip()
+    from_email = os.environ.get("SMTP_FROM_EMAIL", os.environ.get("EMAIL_FROM", os.environ.get("MAIL_DEFAULT_SENDER", ""))).strip()
+    if not from_email:
+        from_email = user if user else "cooked.noreply@gmail.com"
+
+    if "<" in from_email and ">" in from_email:
+        from_addr = from_email
+    else:
+        from_addr = f"{from_name} <{from_email}>"
+
     base_url = os.environ.get("APP_URL", os.environ.get("BASE_URL", "https://comecook.net")).rstrip("/")
 
     return {

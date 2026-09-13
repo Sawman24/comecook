@@ -82,10 +82,10 @@ COOKED_SEED_DEMO=0
 # Transactional Email (Gmail, Brevo, SendGrid, Amazon SES, or custom SMTP)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=comecookapp@gmail.com
+SMTP_USER=cooked.noreply@gmail.com
 SMTP_PASSWORD=your_16_char_google_app_password
 SMTP_USE_TLS=1
-EMAIL_FROM=Cooked <comecookapp@gmail.com>
+EMAIL_FROM=Cooked <cooked.noreply@gmail.com>
 APP_URL=https://comecook.net
 ```
 
@@ -115,10 +115,11 @@ APP_URL=https://comecook.net
    | `COOKED_SEED_DEMO` | `0` | 0 = clean database for real users |
    | `SMTP_HOST` | `smtp.gmail.com` | SMTP host (e.g. Gmail, Brevo, SendGrid) |
    | `SMTP_PORT` | `587` | SMTP port (`587` for TLS, `465` for SSL) |
-   | `SMTP_USER` | `comecookapp@gmail.com` | SMTP username / email address |
+   | `SMTP_USER` | `cooked.noreply@gmail.com` | SMTP username / email address |
    | `SMTP_PASSWORD` | `your_app_password` | Gmail 16-char App Password or SMTP key |
    | `SMTP_USE_TLS` | `1` | `1` for TLS |
-   | `EMAIL_FROM` | `Cooked <comecookapp@gmail.com>` | Sender display name & email |
+   | `SMTP_FROM_NAME` | `Cooked` | Sender display name |
+   | `SMTP_FROM_EMAIL` | `cooked.noreply@gmail.com` | Sender email address |
    | `APP_URL` | `https://comecook.net` | Absolute base URL for reset links |
 6. Click **Deploy the stack**!
 
