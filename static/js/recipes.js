@@ -103,13 +103,19 @@ function applyRecipeFilters() {
 function renderRecipeCard(recipe) {
   const tags = (recipe.tags || []).slice(0, 3).map(t => `<span class="badge badge-secondary">#${escapeHtml(t)}</span>`).join(" ");
   const defaultImg = "https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=80";
+  const ratingHtml = recipe.avg_rating > 0 
+    ? `<span class="recipe-rating-badge" title="${recipe.avg_rating} out of 5 stars (${recipe.reviews_count || 0} reviews)">★ ${recipe.avg_rating} <span style="opacity:0.75; font-weight:normal;">(${recipe.reviews_count || 0})</span></span>`
+    : '';
 
   return `
     <div class="recipe-card" onclick="viewRecipeDetail(${recipe.id})">
       <img class="recipe-card-img" src="${escapeHtml(recipe.image_url || defaultImg)}" alt="${escapeHtml(recipe.title)}" />
       <div class="recipe-card-body">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.35rem;">
-          <span class="badge badge-primary">${escapeHtml(recipe.cuisine || 'Global')}</span>
+          <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+            <span class="badge badge-primary">${escapeHtml(recipe.cuisine || 'Global')}</span>
+            ${ratingHtml}
+          </div>
           <button class="btn-icon" style="padding: 2px;" onclick="event.stopPropagation(); toggleSaveRecipe(${recipe.id}, this)">
             ${recipe.is_saved ? '❤️' : '🤍'}
           </button>
@@ -135,6 +141,7 @@ async function viewRecipeDetail(recipeId) {
     activeRecipeDetail = data.recipe;
     currentServingsScale = 1.0;
     renderRecipeDetailView();
+    fetchAndRenderRecipeReviews(recipeId);
   } catch (err) {
     showToast("Error opening recipe: " + err.message, "error");
   }
@@ -184,11 +191,14 @@ function renderRecipeDetailView() {
   }).join("");
 
   container.innerHTML = `
-    <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+    <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
       <button class="btn btn-secondary btn-sm" onclick="loadRecipesView('${currentRecipeScope}')">
         ← Back to Recipe Box
       </button>
-      <div style="display: flex; gap: 0.5rem;">
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <button class="btn btn-primary btn-sm" onclick="openReviewModal(${r.id}, '${escapeHtml(r.title)}')">
+          📸 I Made This!
+        </button>
         <button class="btn btn-outline btn-sm" onclick="toggleSaveRecipe(${r.id})">
           ${r.is_saved ? '❤️ Saved to Box' : '🤍 Save to Box'}
         </button>
@@ -211,9 +221,10 @@ function renderRecipeDetailView() {
         </div>
       ` : ''}
       <div class="recipe-hero-content">
-        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap;">
           <span class="badge badge-primary">${escapeHtml(r.cuisine || 'Global')}</span>
           <span class="badge badge-success">${escapeHtml(r.difficulty || 'Medium')}</span>
+          ${r.avg_rating > 0 ? `<span class="recipe-rating-badge">★ ${r.avg_rating} (${r.reviews_count} reviews)</span>` : ''}
         </div>
         <h1 style="font-size: 1.8rem; margin-bottom: 0.5rem;">${escapeHtml(r.title)}</h1>
         <p style="color: var(--text-muted); font-size: 1rem; margin-bottom: 1rem;">${escapeHtml(r.description || '')}</p>
@@ -244,6 +255,10 @@ function renderRecipeDetailView() {
           <div class="meta-badge-box">
             <div class="label">Servings</div>
             <div class="value">${currentServings}</div>
+          </div>
+          <div class="meta-badge-box">
+            <div class="label">Rating</div>
+            <div class="value" style="color: #d97706;">${r.avg_rating > 0 ? `★ ${r.avg_rating}` : 'New'}</div>
           </div>
         </div>
         <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">${tagsHtml}</div>
@@ -278,6 +293,25 @@ function renderRecipeDetailView() {
         </div>
         <div>
           ${stepsHtml}
+        </div>
+      </div>
+    </div>
+
+    <!-- Community Remakes & Reviews Section -->
+    <div class="remakes-section" id="recipe-reviews-section">
+      <div class="remakes-header">
+        <div>
+          <h3 style="font-size: 1.3rem; margin-bottom: 0.25rem;">🍳 Made by the Community</h3>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Cook snaps, star ratings, and chef notes from the brigade.</p>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openReviewModal(${r.id}, '${escapeHtml(r.title)}')">
+          <span>📸</span> Post Your Remake
+        </button>
+      </div>
+
+      <div id="recipe-reviews-content">
+        <div style="text-align: center; padding: 1.5rem; color: var(--text-light); font-size: 0.88rem;">
+          Loading community creations...
         </div>
       </div>
     </div>
@@ -519,3 +553,231 @@ async function handleRecipeEditorSubmit(e) {
     showToast("Save error: " + err.message, "error");
   }
 }
+
+/* ==============================================================================
+   RECIPE REVIEWS & COOK SNAPS ("I MADE THIS!")
+   ============================================================================== */
+
+async function fetchAndRenderRecipeReviews(recipeId) {
+  const container = document.getElementById("recipe-reviews-content");
+  if (!container) return;
+
+  try {
+    const data = await apiRequest(`/api/recipes/${recipeId}/reviews`);
+    const reviews = data.reviews || [];
+    const photoReviews = reviews.filter(r => r.image_url);
+
+    let photosCarouselHtml = "";
+    if (photoReviews.length > 0) {
+      photosCarouselHtml = `
+        <div style="margin-bottom: 1.5rem;">
+          <h4 style="font-size: 0.95rem; margin-bottom: 0.75rem; color: var(--text-main);">📸 Community Dish Snaps (${photoReviews.length})</h4>
+          <div class="remakes-carousel">
+            ${photoReviews.map(pr => `
+              <div class="remake-card">
+                <img src="${escapeHtml(pr.image_url)}" class="remake-card-img" onclick="openLightbox('${escapeHtml(pr.image_url)}', 'Cook Snap by @${escapeHtml(pr.username)}')" alt="Dish Snap" />
+                <div class="remake-card-body">
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 700; font-size: 0.82rem; cursor: pointer;" onclick="openUserProfile('${escapeHtml(pr.username)}')">@${escapeHtml(pr.username)}</span>
+                    <span style="color: #f59e0b; font-size: 0.8rem;">${'★'.repeat(pr.rating || 5)}</span>
+                  </div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    let reviewsListHtml = "";
+    if (reviews.length === 0) {
+      reviewsListHtml = `
+        <div style="text-align: center; padding: 2.5rem 1rem; background: var(--bg-surface); border: 1px dashed var(--border-color); border-radius: var(--radius-md);">
+          <span style="font-size: 2.2rem; display: block; margin-bottom: 0.35rem;">🍳</span>
+          <h4>No remakes yet</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Be the first chef to cook this recipe and share your snap & rating!</p>
+          <button class="btn btn-primary btn-sm" style="margin-top: 0.75rem;" onclick="openReviewModal(${recipeId}, '${escapeHtml(activeRecipeDetail?.title || '')}')">
+            I Made This!
+          </button>
+        </div>
+      `;
+    } else {
+      reviewsListHtml = `
+        <div class="reviews-list-container">
+          ${reviews.map(rev => {
+            const isOwner = currentUser && (currentUser.id === rev.user_id || currentUser.is_admin === 1);
+            const stars = '★'.repeat(rev.rating) + '☆'.repeat(5 - rev.rating);
+            return `
+              <div class="review-item-card">
+                <img src="${escapeHtml(rev.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" style="cursor: pointer;" onclick="openUserProfile('${escapeHtml(rev.username)}')" />
+                <div class="review-item-main">
+                  <div class="review-item-header">
+                    <div>
+                      <span style="font-weight: 700; font-size: 0.9rem; cursor: pointer;" onclick="openUserProfile('${escapeHtml(rev.username)}')">
+                        ${escapeHtml(rev.display_name || rev.username)}
+                      </span>
+                      <span style="font-size: 0.75rem; color: var(--text-light); margin-left: 0.35rem;">@${escapeHtml(rev.username)} • ${formatTimeAgo(rev.created_at)}</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                      <span class="review-item-stars" title="${rev.rating} of 5 stars">${stars}</span>
+                      ${isOwner ? `
+                        <button class="btn-icon" style="color: var(--danger); font-size: 0.8rem; padding: 2px;" title="Delete Review" onclick="deleteReview(${recipeId}, ${rev.id})">🗑️</button>
+                      ` : ''}
+                    </div>
+                  </div>
+                  ${rev.review ? `<p class="review-item-notes">${escapeHtml(rev.review)}</p>` : ''}
+                  ${rev.image_url ? `
+                    <div style="margin-top: 0.5rem; max-width: 200px;">
+                      <img src="${escapeHtml(rev.image_url)}" style="width: 100%; border-radius: var(--radius-sm); cursor: pointer;" onclick="openLightbox('${escapeHtml(rev.image_url)}', 'Cook Snap by @${escapeHtml(rev.username)}')" />
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    container.innerHTML = photosCarouselHtml + reviewsListHtml;
+  } catch (err) {
+    container.innerHTML = `<div style="text-align: center; padding: 1.5rem; color: var(--danger); font-size: 0.85rem;">Failed to load reviews</div>`;
+  }
+}
+
+function openReviewModal(recipeId, recipeTitle) {
+  if (!currentUser) {
+    openAuthModal("login");
+    return;
+  }
+  const modal = document.getElementById("review-modal");
+  if (!modal) return;
+
+  document.getElementById("review-recipe-id").value = recipeId;
+  document.getElementById("review-recipe-subtitle").textContent = `Reviewing: ${recipeTitle || 'Recipe'}`;
+  document.getElementById("review-rating-val").value = "5";
+  setStarRating(5);
+  document.getElementById("review-text-input").value = "";
+  document.getElementById("review-photo-url").value = "";
+  document.getElementById("review-photo-file-input").value = "";
+  
+  const previewImg = document.getElementById("review-photo-preview");
+  const dropContent = document.getElementById("review-photo-dropzone-content");
+  if (previewImg) previewImg.classList.add("hidden");
+  if (dropContent) {
+    dropContent.classList.remove("hidden");
+    dropContent.innerHTML = `
+      <span style="font-size: 2rem;">📸</span>
+      <p><strong>Click to upload dish snap</strong> or drag and drop</p>
+      <span class="upload-hint">JPEG, PNG, WebP up to 16MB</span>
+    `;
+  }
+
+  // Pre-fill if user has an existing review
+  if (activeRecipeDetail && activeRecipeDetail.user_review) {
+    const ur = activeRecipeDetail.user_review;
+    document.getElementById("review-rating-val").value = ur.rating || 5;
+    setStarRating(ur.rating || 5);
+    document.getElementById("review-text-input").value = ur.review || "";
+    if (ur.image_url) {
+      document.getElementById("review-photo-url").value = ur.image_url;
+      if (previewImg) {
+        previewImg.src = ur.image_url;
+        previewImg.classList.remove("hidden");
+      }
+      if (dropContent) dropContent.classList.add("hidden");
+    }
+  }
+
+  modal.classList.add("active");
+}
+
+function closeReviewModal() {
+  const modal = document.getElementById("review-modal");
+  if (modal) modal.classList.remove("active");
+}
+
+function setStarRating(rating) {
+  document.getElementById("review-rating-val").value = rating;
+  const starBtns = document.querySelectorAll("#star-rating-picker .star-btn");
+  starBtns.forEach(btn => {
+    const val = parseInt(btn.getAttribute("data-value"));
+    if (val <= rating) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+}
+
+async function handleReviewPhotoSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const dropContent = document.getElementById("review-photo-dropzone-content");
+  const previewImg = document.getElementById("review-photo-preview");
+
+  try {
+    if (dropContent) {
+      dropContent.innerHTML = `<div class="spinner-small"></div><p style="margin-top: 0.5rem; font-size: 0.85rem;">Uploading dish snap...</p>`;
+    }
+    const uploadedUrl = await downsampleAndUploadImage(file);
+    document.getElementById("review-photo-url").value = uploadedUrl;
+    if (previewImg) {
+      previewImg.src = uploadedUrl;
+      previewImg.classList.remove("hidden");
+    }
+    if (dropContent) dropContent.classList.add("hidden");
+  } catch (err) {
+    showToast("Photo upload failed: " + err.message, "error");
+    if (dropContent) {
+      dropContent.innerHTML = `
+        <span style="font-size: 2rem;">📸</span>
+        <p><strong>Click to upload dish snap</strong> or drag and drop</p>
+        <span class="upload-hint">JPEG, PNG, WebP up to 16MB</span>
+      `;
+    }
+  }
+}
+
+async function handleReviewSubmit(e) {
+  e.preventDefault();
+  const recipeId = document.getElementById("review-recipe-id").value;
+  const rating = parseInt(document.getElementById("review-rating-val").value) || 5;
+  const review = document.getElementById("review-text-input").value.trim();
+  const image_url = document.getElementById("review-photo-url").value.trim();
+  const share_to_feed = document.getElementById("review-share-feed").checked;
+
+  const submitBtn = document.getElementById("review-submit-btn");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Posting Remake...";
+
+  try {
+    const res = await apiRequest(`/api/recipes/${recipeId}/reviews`, {
+      method: "POST",
+      body: JSON.stringify({ rating, review, image_url, share_to_feed })
+    });
+    showToast(res.message || "Remake shared successfully!", "success");
+    closeReviewModal();
+    viewRecipeDetail(parseInt(recipeId));
+  } catch (err) {
+    showToast("Failed to post review: " + err.message, "error");
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Post Remake & Rating";
+  }
+}
+
+async function deleteReview(recipeId, reviewId) {
+  if (!confirm("Are you sure you want to delete your review?")) return;
+  try {
+    const res = await apiRequest(`/api/recipes/${recipeId}/reviews/${reviewId}`, {
+      method: "DELETE"
+    });
+    showToast(res.message || "Review deleted", "success");
+    viewRecipeDetail(parseInt(recipeId));
+  } catch (err) {
+    showToast("Delete error: " + err.message, "error");
+  }
+}
+

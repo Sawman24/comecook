@@ -8,6 +8,8 @@ from PIL import Image
 import io
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from html import escape as html_escape
+
 from database import get_db_connection, init_db, seed_data_if_empty
 from auth import (
     hash_password, verify_password, create_user_session,
@@ -57,6 +59,31 @@ def apply_security_headers(response):
 
 
 # ==============================================================================
+# NOTIFICATION HELPER ENGINE
+# ==============================================================================
+
+def create_notification(user_id: int, actor_id: int, notif_type: str, entity_type: str, entity_id: int, message: str, conn=None):
+    """Insert in-app notification if actor is not the recipient."""
+    if not user_id or not actor_id or user_id == actor_id:
+        return
+    close_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            close_conn = True
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO notifications (user_id, actor_id, type, entity_type, entity_id, message)
+            VALUES (?, ?, ?, ?, ?, ?);
+        """, (user_id, actor_id, notif_type, entity_type, entity_id, message))
+        if close_conn:
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        app.logger.warning(f"Failed to create notification: {e}")
+
+
+# ==============================================================================
 # HEALTHCHECK & SYSTEM STATUS
 # ==============================================================================
 
@@ -71,17 +98,160 @@ def health_check():
 
 
 # ==============================================================================
-# STATIC & MEDIA SERVING
+# STATIC & RICH SOCIAL SHARING PREVIEWS (OpenGraph & Twitter Cards)
 # ==============================================================================
+
+def render_page_with_meta(og_title=None, og_desc=None, og_img=None, og_url=None):
+    """Dynamically inject OpenGraph and Twitter card metadata into index.html."""
+    default_title = "Cooked — Made for Cooks, By Cooks"
+    default_desc = "The premier social culinary platform and digital recipe box. Ask cooking questions, share dish photos, import recipes, plan meals, and manage your kitchen pantry."
+    default_img = "https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200&auto=format&fit=crop&q=80"
+
+    title = og_title or default_title
+    desc = og_desc or default_desc
+    img = og_img or default_img
+    url = og_url or request.base_url
+
+    # Normalize relative images to absolute URLs
+    if img and img.startswith("/"):
+        img = request.host_url.rstrip("/") + img
+
+    index_path = os.path.join(app.static_folder, "index.html")
+    with open(index_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+
+    meta_tags = f"""  <title>{html_escape(title)}</title>
+  <meta name="description" content="{html_escape(desc)}" />
+  <!-- OpenGraph Social Sharing -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Cooked" />
+  <meta property="og:title" content="{html_escape(title)}" />
+  <meta property="og:description" content="{html_escape(desc)}" />
+  <meta property="og:image" content="{html_escape(img)}" />
+  <meta property="og:url" content="{html_escape(url)}" />
+  <!-- Twitter Card Sharing -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="{html_escape(title)}" />
+  <meta name="twitter:description" content="{html_escape(desc)}" />
+  <meta name="twitter:image" content="{html_escape(img)}" />"""
+
+    pattern = r"<title>.*?</title>\s*<meta name=\"description\" content=\".*?\" />"
+    if re.search(pattern, html_content, flags=re.DOTALL):
+        html_content = re.sub(pattern, meta_tags, html_content, flags=re.DOTALL)
+    else:
+        html_content = html_content.replace("<head>", f"<head>\n{meta_tags}")
+
+    response = make_response(html_content, 200)
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
 
 @app.route("/")
 def index():
-    return send_from_directory(app.static_folder, "index.html")
+    return render_page_with_meta()
+
+@app.route("/recipes/<int:recipe_id>")
+def recipe_share_page(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT r.id, r.title, r.description, r.prep_time_min, r.cook_time_min, r.image_url,
+               u.username, u.display_name
+        FROM recipes r
+        JOIN users u ON r.user_id = u.id
+        WHERE r.id = ? AND r.is_public = 1;
+    """, (recipe_id,))
+    recipe = cursor.fetchone()
+    conn.close()
+
+    if recipe:
+        title = f"{recipe['title']} — by @{recipe['username']} on Cooked"
+        total_time = (recipe['prep_time_min'] or 0) + (recipe['cook_time_min'] or 0)
+        time_str = f" • Ready in {total_time} mins" if total_time else ""
+        desc = (recipe['description'] or f"Check out this recipe for {recipe['title']} by {recipe['display_name']} on Cooked!") + time_str
+        return render_page_with_meta(
+            og_title=title,
+            og_desc=desc,
+            og_img=recipe['image_url'],
+            og_url=f"https://comecook.app/recipes/{recipe_id}"
+        )
+    return render_page_with_meta()
+
+@app.route("/posts/<int:post_id>")
+def post_share_page(post_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT p.id, p.content, p.image_url, u.username, u.display_name
+        FROM community_posts p
+        JOIN users u ON p.user_id = u.id
+        WHERE p.id = ? AND p.is_hidden = 0;
+    """, (post_id,))
+    post = cursor.fetchone()
+    conn.close()
+
+    if post:
+        title = f"Culinary Post by @{post['username']} on Cooked"
+        desc = post['content'][:200] if post['content'] else "Check out this dish on Cooked!"
+        return render_page_with_meta(
+            og_title=title,
+            og_desc=desc,
+            og_img=post['image_url'],
+            og_url=f"https://comecook.app/posts/{post_id}"
+        )
+    return render_page_with_meta()
+
+@app.route("/chefs/<username>")
+def chef_share_page(username):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
+               (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count
+        FROM users u
+        WHERE u.username = ? AND u.is_active = 1;
+    """, (username,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if user:
+        title = f"{user['display_name']} (@{user['username']}) on Cooked"
+        desc = user['bio'] or f"Explore {user['recipe_count']} recipes and culinary creations from Chef @{user['username']} on Cooked."
+        return render_page_with_meta(
+            og_title=title,
+            og_desc=desc,
+            og_img=user['avatar_url'],
+            og_url=f"https://comecook.app/chefs/{username}"
+        )
+    return render_page_with_meta()
+
+@app.route("/stations/<slug>")
+def station_share_page(slug):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT name, slug, description, icon, banner_url, member_count
+        FROM stations
+        WHERE slug = ?;
+    """, (slug,))
+    station = cursor.fetchone()
+    conn.close()
+
+    if station:
+        title = f"{station['icon']} {station['name']} Kitchen Station on Cooked"
+        desc = f"{station['description']} • {station['member_count']} chefs clocked in."
+        return render_page_with_meta(
+            og_title=title,
+            og_desc=desc,
+            og_img=station['banner_url'],
+            og_url=f"https://comecook.app/stations/{slug}"
+        )
+    return render_page_with_meta()
 
 @app.route("/uploads/<path:filename>")
 @app.route("/api/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
 
 
 
@@ -430,6 +600,15 @@ def toggle_follow(target_user_id):
             VALUES (?, ?);
         """, (g.current_user["id"], target_user_id))
         is_following = True
+        create_notification(
+            user_id=target_user_id,
+            actor_id=g.current_user["id"],
+            notif_type="follow",
+            entity_type="user",
+            entity_id=g.current_user["id"],
+            message=f"@{g.current_user['username']} started following you.",
+            conn=conn
+        )
     else:
         cursor.execute("""
             DELETE FROM friendships
@@ -661,7 +840,9 @@ def get_recipes():
         SELECT r.id, r.user_id, r.original_author_id, r.title, r.description,
                r.prep_time_min, r.cook_time_min, r.servings, r.difficulty, r.cuisine,
                r.tags_json, r.image_url, r.source_url, r.is_public, r.created_at,
-               u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar
+               u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar,
+               ROUND((SELECT AVG(rating) FROM recipe_reviews rr WHERE rr.recipe_id = r.id), 1) AS avg_rating,
+               (SELECT COUNT(*) FROM recipe_reviews rr WHERE rr.recipe_id = r.id) AS reviews_count
         FROM recipes r
         JOIN users u ON r.user_id = u.id
         {where_clause}
@@ -695,7 +876,9 @@ def get_recipe_detail(recipe_id):
     cursor.execute("""
         SELECT r.*,
                u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar,
-               orig.username AS orig_author_username, orig.display_name AS orig_author_display_name
+               orig.username AS orig_author_username, orig.display_name AS orig_author_display_name,
+               ROUND((SELECT AVG(rating) FROM recipe_reviews rr WHERE rr.recipe_id = r.id), 1) AS avg_rating,
+               (SELECT COUNT(*) FROM recipe_reviews rr WHERE rr.recipe_id = r.id) AS reviews_count
         FROM recipes r
         JOIN users u ON r.user_id = u.id
         LEFT JOIN users orig ON r.original_author_id = orig.id
@@ -727,9 +910,14 @@ def get_recipe_detail(recipe_id):
         saved = cursor.fetchone()
         recipe_dict["is_saved"] = bool(saved)
         recipe_dict["saved_folder"] = saved["folder_name"] if saved else ""
+
+        cursor.execute("SELECT id, rating, review, image_url, created_at FROM recipe_reviews WHERE user_id = ? AND recipe_id = ?;", (current_user["id"], recipe_id))
+        user_rev = cursor.fetchone()
+        recipe_dict["user_review"] = dict(user_rev) if user_rev else None
     else:
         recipe_dict["is_saved"] = False
         recipe_dict["saved_folder"] = ""
+        recipe_dict["user_review"] = None
 
     conn.close()
     return jsonify({"recipe": recipe_dict})
@@ -923,6 +1111,19 @@ def fork_recipe(recipe_id):
     ))
     new_id = cursor.lastrowid
     conn.commit()
+
+    if orig["user_id"] != g.current_user["id"]:
+        create_notification(
+            user_id=orig["user_id"],
+            actor_id=g.current_user["id"],
+            notif_type="fork",
+            entity_type="recipe",
+            entity_id=orig["id"],
+            message=f"@{g.current_user['username']} forked your recipe '{orig['title']}'.",
+            conn=conn
+        )
+        conn.commit()
+
     conn.close()
 
     return jsonify({"success": True, "message": "Recipe forked to your Recipe Box!", "recipe_id": new_id}), 201
@@ -940,6 +1141,128 @@ def scrape_recipe():
         return jsonify({"success": True, "recipe": scraped_data})
     except Exception as e:
         return jsonify({"error": "Scrape Error", "message": f"Could not scrape recipe: {str(e)}"}), 422
+
+
+# ==============================================================================
+# RECIPE REVIEWS & DISH REMAKES ("I MADE THIS!")
+# ==============================================================================
+
+@app.route("/api/recipes/<int:recipe_id>/reviews", methods=["GET"])
+def get_recipe_reviews(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT r.id, r.recipe_id, r.user_id, r.rating, r.review, r.image_url, r.created_at,
+               u.username, u.display_name, u.avatar_url
+        FROM recipe_reviews r
+        JOIN users u ON r.user_id = u.id
+        WHERE r.recipe_id = ?
+        ORDER BY r.created_at DESC;
+    """, (recipe_id,))
+    reviews = [dict(row) for row in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT ROUND(AVG(rating), 1) AS avg_rating, COUNT(*) AS count
+        FROM recipe_reviews
+        WHERE recipe_id = ?;
+    """, (recipe_id,))
+    stats = cursor.fetchone()
+    avg_rating = stats["avg_rating"] if stats and stats["avg_rating"] is not None else 0.0
+    count = stats["count"] if stats else 0
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "reviews": reviews,
+        "avg_rating": avg_rating,
+        "count": count
+    })
+
+@app.route("/api/recipes/<int:recipe_id>/reviews", methods=["POST"])
+@require_auth
+def create_or_update_recipe_review(recipe_id):
+    data = request.get_json() or {}
+    try:
+        rating = int(data.get("rating") or 5)
+    except (ValueError, TypeError):
+        rating = 5
+    rating = max(1, min(5, rating))
+
+    review_text = (data.get("review") or "").strip()
+    image_url = (data.get("image_url") or "").strip()
+    share_to_feed = bool(data.get("share_to_feed", False))
+
+    if review_text:
+        is_clean, err_msg = validate_clean_content(review_text, "Review")
+        if not is_clean:
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, user_id, title, is_public FROM recipes WHERE id = ?;", (recipe_id,))
+    recipe = cursor.fetchone()
+    if not recipe:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
+
+    cursor.execute("""
+        INSERT INTO recipe_reviews (recipe_id, user_id, rating, review, image_url)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(recipe_id, user_id) DO UPDATE SET
+            rating = excluded.rating,
+            review = excluded.review,
+            image_url = excluded.image_url,
+            created_at = CURRENT_TIMESTAMP;
+    """, (recipe_id, g.current_user["id"], rating, review_text, image_url))
+    conn.commit()
+
+    # In-app notification to original author
+    if recipe["user_id"] != g.current_user["id"]:
+        stars_str = "★" * rating
+        create_notification(
+            user_id=recipe["user_id"],
+            actor_id=g.current_user["id"],
+            notif_type="review",
+            entity_type="recipe",
+            entity_id=recipe_id,
+            message=f"@{g.current_user['username']} made your recipe '{recipe['title']}' and left a {rating}★ rating ({stars_str})!",
+            conn=conn
+        )
+
+    # If user selected to share remake to the community feed
+    if share_to_feed:
+        feed_content = f"🍳 I Made This: {recipe['title']}!\nRating: {'★' * rating} ({rating}/5)\n\n{review_text}".strip()
+        cursor.execute("""
+            INSERT INTO community_posts (user_id, recipe_id, content, image_url)
+            VALUES (?, ?, ?, ?);
+        """, (g.current_user["id"], recipe_id, feed_content, image_url))
+        conn.commit()
+
+    conn.close()
+    return jsonify({"success": True, "message": "Your review and remake have been shared!"})
+
+@app.route("/api/recipes/<int:recipe_id>/reviews/<int:review_id>", methods=["DELETE"])
+@require_auth
+def delete_recipe_review(recipe_id, review_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, user_id FROM recipe_reviews WHERE id = ? AND recipe_id = ?;", (review_id, recipe_id))
+    review = cursor.fetchone()
+    if not review:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Review not found"}), 404
+
+    if review["user_id"] != g.current_user["id"] and g.current_user.get("is_admin") != 1:
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "You can only delete your own reviews"}), 403
+
+    cursor.execute("DELETE FROM recipe_reviews WHERE id = ?;", (review_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Review removed"})
 
 
 # ==============================================================================
@@ -1145,6 +1468,57 @@ def create_station():
         }
     }), 201
 
+@app.route("/api/stations/<slug>/leaderboard", methods=["GET"])
+def get_station_leaderboard(slug):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, name, slug, icon FROM stations WHERE slug = ?;", (slug,))
+    station = cursor.fetchone()
+    if not station:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Kitchen station not found"}), 404
+
+    station_id = station["id"]
+
+    # Top contributors / lead cooks in station
+    cursor.execute("""
+        SELECT u.id, u.username, u.display_name, u.avatar_url,
+               COUNT(DISTINCT cp.id) AS post_count,
+               COUNT(pl.id) AS likes_received
+        FROM users u
+        JOIN community_posts cp ON cp.user_id = u.id AND cp.station_id = ? AND cp.is_hidden = 0
+        LEFT JOIN post_likes pl ON pl.post_id = cp.id
+        GROUP BY u.id
+        ORDER BY likes_received DESC, post_count DESC
+        LIMIT 10;
+    """, (station_id,))
+    top_chefs = [dict(row) for row in cursor.fetchall()]
+
+    # Trending station dishes & discussions
+    cursor.execute("""
+        SELECT cp.id, cp.content, cp.image_url, cp.recipe_id, cp.created_at,
+               u.username, u.display_name, u.avatar_url,
+               (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = cp.id) AS like_count,
+               (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = cp.id AND pc.is_hidden = 0) AS comment_count,
+               r.title AS recipe_title
+        FROM community_posts cp
+        JOIN users u ON cp.user_id = u.id
+        LEFT JOIN recipes r ON cp.recipe_id = r.id
+        WHERE cp.station_id = ? AND cp.is_hidden = 0
+        ORDER BY like_count DESC, cp.created_at DESC
+        LIMIT 6;
+    """, (station_id,))
+    trending_dishes = [dict(row) for row in cursor.fetchall()]
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "station": dict(station),
+        "lead_cooks": top_chefs,
+        "trending_dishes": trending_dishes
+    })
+
 
 # ==============================================================================
 # COMMUNITY POSTS, LIKES, COMMENTS & MODERATION
@@ -1282,6 +1656,20 @@ def toggle_post_like(post_id):
             VALUES (?, ?);
         """, (post_id, g.current_user["id"]))
         is_liked = True
+
+        cursor.execute("SELECT user_id, content FROM community_posts WHERE id = ?;", (post_id,))
+        p_row = cursor.fetchone()
+        if p_row and p_row["user_id"] != g.current_user["id"]:
+            snippet = (p_row["content"] or "your post")[:40]
+            create_notification(
+                user_id=p_row["user_id"],
+                actor_id=g.current_user["id"],
+                notif_type="like",
+                entity_type="post",
+                entity_id=post_id,
+                message=f"@{g.current_user['username']} liked your post: \"{snippet}\"",
+                conn=conn
+            )
     else:
         cursor.execute("""
             DELETE FROM post_likes
@@ -1335,6 +1723,21 @@ def create_comment(post_id):
     """, (post_id, g.current_user["id"], comment_text, parent_id, reply_to_username))
     comment_id = cursor.lastrowid
     conn.commit()
+
+    cursor.execute("SELECT user_id, content FROM community_posts WHERE id = ?;", (post_id,))
+    p_row = cursor.fetchone()
+    if p_row and p_row["user_id"] != g.current_user["id"]:
+        create_notification(
+            user_id=p_row["user_id"],
+            actor_id=g.current_user["id"],
+            notif_type="comment",
+            entity_type="post",
+            entity_id=post_id,
+            message=f"@{g.current_user['username']} commented: \"{comment_text[:40]}\"",
+            conn=conn
+        )
+        conn.commit()
+
     conn.close()
 
     return jsonify({
@@ -1399,6 +1802,95 @@ def submit_report():
     conn.close()
 
     return jsonify({"success": True, "message": "Report submitted for moderation review"})
+
+
+# ==============================================================================
+# IN-APP NOTIFICATIONS & ACTIVITY INBOX
+# ==============================================================================
+
+@app.route("/api/notifications", methods=["GET"])
+@require_auth
+def get_notifications():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT n.id, n.user_id, n.actor_id, n.type, n.entity_type, n.entity_id, n.message, n.is_read, n.created_at,
+               u.username AS actor_username, u.display_name AS actor_display_name, u.avatar_url AS actor_avatar
+        FROM notifications n
+        LEFT JOIN users u ON n.actor_id = u.id
+        WHERE n.user_id = ?
+        ORDER BY n.created_at DESC
+        LIMIT 50;
+    """, (g.current_user["id"],))
+    notifications = [dict(row) for row in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT COUNT(*) AS unread_count
+        FROM notifications
+        WHERE user_id = ? AND is_read = 0;
+    """, (g.current_user["id"],))
+    unread_count = cursor.fetchone()["unread_count"]
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "notifications": notifications,
+        "unread_count": unread_count
+    })
+
+@app.route("/api/notifications/read", methods=["POST"])
+@require_auth
+def mark_notifications_read():
+    data = request.get_json() or {}
+    notif_ids = data.get("notification_ids")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if notif_ids and isinstance(notif_ids, list):
+        placeholders = ",".join(["?"] * len(notif_ids))
+        cursor.execute(f"""
+            UPDATE notifications
+            SET is_read = 1
+            WHERE user_id = ? AND id IN ({placeholders});
+        """, [g.current_user["id"]] + notif_ids)
+    else:
+        cursor.execute("""
+            UPDATE notifications
+            SET is_read = 1
+            WHERE user_id = ?;
+        """, (g.current_user["id"],))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Notifications marked as read"})
+
+@app.route("/api/notifications/<int:notif_id>", methods=["DELETE"])
+@require_auth
+def delete_notification(notif_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, user_id FROM notifications WHERE id = ?;", (notif_id,))
+    notif = cursor.fetchone()
+    if not notif:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Notification not found"}), 404
+
+    if notif["user_id"] != g.current_user["id"] and g.current_user.get("is_admin") != 1:
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "You can only delete your own notifications"}), 403
+
+    cursor.execute("DELETE FROM notifications WHERE id = ?;", (notif_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Notification deleted"})
+
+
+# ==============================================================================
+# ADMIN & MODERATION DASHBOARD
+# ==============================================================================
 
 @app.route("/api/admin/stats", methods=["GET"])
 @admin_required

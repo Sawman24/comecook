@@ -28,6 +28,25 @@
       </div>
 
       <div class="nav-right">
+        <!-- In-App Notification Bell & Inbox Dropdown -->
+        <div class="notif-wrapper" id="notif-wrapper" style="display: none;">
+          <button class="btn-icon notif-bell-btn" id="notif-bell-btn" onclick="toggleNotificationDropdown(event)" title="Activity Notifications">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor;" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+            <span class="notif-badge" id="notif-badge" style="display: none;">0</span>
+          </button>
+          <div class="notif-dropdown" id="notif-dropdown" style="display: none;">
+            <div class="notif-dropdown-header">
+              <h4>Activity Inbox</h4>
+              <button class="btn-text btn-sm" onclick="markAllNotificationsRead()">Mark all read</button>
+            </div>
+            <div class="notif-dropdown-body" id="notif-list-container">
+              <p class="empty-state" style="padding: 1.5rem; text-align: center; color: var(--text-light);">No notifications yet</p>
+            </div>
+          </div>
+        </div>
+
         <button class="btn-icon" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle Theme">🌙</button>
         <div id="nav-auth-container">
           <!-- Populated by auth.js -->
@@ -563,11 +582,76 @@
     </div>
   </div>
 
+  <!-- 9. "I MADE THIS!" DISH REMAKE & REVIEW MODAL -->
+  <div class="modal-backdrop" id="review-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="review-modal-title">🍳 I Made This!</h3>
+        <button class="btn-icon" onclick="closeReviewModal()">✕</button>
+      </div>
+      <form onsubmit="handleReviewSubmit(event)">
+        <input type="hidden" id="review-recipe-id" />
+        <div class="modal-body">
+          <p id="review-recipe-subtitle" style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;"></p>
+          
+          <!-- Star Rating Picker -->
+          <div class="form-group">
+            <label style="display: block; margin-bottom: 0.35rem; font-weight: 600;">Your Star Rating <span style="color: var(--danger);">*</span></label>
+            <div class="star-rating-picker" id="star-rating-picker">
+              <span class="star-btn" data-value="1" onclick="setStarRating(1)">★</span>
+              <span class="star-btn" data-value="2" onclick="setStarRating(2)">★</span>
+              <span class="star-btn" data-value="3" onclick="setStarRating(3)">★</span>
+              <span class="star-btn" data-value="4" onclick="setStarRating(4)">★</span>
+              <span class="star-btn active" data-value="5" onclick="setStarRating(5)">★</span>
+            </div>
+            <input type="hidden" id="review-rating-val" value="5" />
+          </div>
+
+          <!-- Dish Photo Upload -->
+          <div class="form-group">
+            <label style="display: block; margin-bottom: 0.35rem; font-weight: 600;">Dish Photo / Cook Snap (Optional)</label>
+            <div class="image-upload-wrapper">
+              <label for="review-photo-file-input" class="image-upload-dropzone" id="review-photo-dropzone">
+                <div class="upload-dropzone-content" id="review-photo-dropzone-content">
+                  <span style="font-size: 2rem;">📸</span>
+                  <p><strong>Click to upload dish snap</strong> or drag and drop</p>
+                  <span class="upload-hint">JPEG, PNG, WebP up to 16MB</span>
+                </div>
+                <img id="review-photo-preview" class="upload-preview-img hidden" alt="Dish Preview" />
+              </label>
+              <input type="file" id="review-photo-file-input" accept="image/*" style="display: none;" onchange="handleReviewPhotoSelect(this)" />
+              <input type="hidden" id="review-photo-url" />
+            </div>
+          </div>
+
+          <!-- Cooking Notes / Review Text -->
+          <div class="form-group">
+            <label style="display: block; margin-bottom: 0.35rem; font-weight: 600;">Chef's Notes & Modifications</label>
+            <textarea id="review-text-input" class="form-control" rows="3" placeholder="How did it turn out? Any substitutions, cooking time tweaks, or seasoning adjustments?"></textarea>
+          </div>
+
+          <!-- Share to Community Feed Checkbox -->
+          <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+            <input type="checkbox" id="review-share-feed" checked style="width: 18px; height: 18px; cursor: pointer;" />
+            <label for="review-share-feed" style="margin-bottom: 0; cursor: pointer; font-size: 0.9rem; font-weight: 500;">
+              Share cook snap & remake to Community Feed
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeReviewModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="review-submit-btn">Post Remake & Rating</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- JAVASCRIPT MODULE SCRIPTS -->
   <script src="/js/api.js?v=2.3.0"></script>
   <script src="/js/theme.js?v=2.3.0"></script>
   <script src="/js/lightbox.js?v=2.3.0"></script>
   <script src="/js/auth.js?v=2.3.0"></script>
+  <script src="/js/notifications.js?v=2.3.0"></script>
   <script src="/js/recipes.js?v=2.3.0"></script>
   <script src="/js/scraper.js?v=2.3.0"></script>
   <script src="/js/community.js?v=2.3.0"></script>

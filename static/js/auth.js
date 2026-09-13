@@ -20,9 +20,18 @@ async function checkAuthStatus() {
 function updateAuthUI() {
   const container = document.getElementById("nav-auth-container");
   const adminNav = document.getElementById("admin-nav-section");
+  const notifWrapper = document.getElementById("notif-wrapper");
 
   if (adminNav) {
     adminNav.style.display = (currentUser && currentUser.is_admin === 1) ? "block" : "none";
+  }
+
+  if (notifWrapper) {
+    notifWrapper.style.display = currentUser ? "flex" : "none";
+  }
+
+  if (typeof initNotificationEngine === "function") {
+    initNotificationEngine();
   }
 
   if (!container) return;

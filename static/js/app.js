@@ -11,9 +11,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Load Featured Chefs & Right Sidebar Content
   loadRightSidebarData();
 
-  // Route to initial view based on URL hash or default to feed
+  // Route to initial view based on direct URL pathname or URL hash
+  const pathname = window.location.pathname;
   const hash = window.location.hash.replace("#", "");
-  if (hash.startsWith("recipe/")) {
+
+  if (pathname.startsWith("/recipes/") && pathname.split("/")[2]) {
+    const id = pathname.split("/")[2];
+    viewRecipeDetail(parseInt(id));
+  } else if (pathname.startsWith("/chefs/") && pathname.split("/")[2]) {
+    const user = pathname.split("/")[2];
+    openUserProfile(user);
+  } else if (pathname.startsWith("/stations/") && pathname.split("/")[2]) {
+    const slug = pathname.split("/")[2];
+    navigateToStation(slug);
+  } else if (pathname.startsWith("/posts/") && pathname.split("/")[2]) {
+    const postId = pathname.split("/")[2];
+    navigateTo("feed");
+    setTimeout(() => openCommentsModal(parseInt(postId)), 300);
+  } else if (hash.startsWith("recipe/")) {
     const id = hash.split("/")[1];
     viewRecipeDetail(parseInt(id));
   } else if (hash.startsWith("chef/")) {

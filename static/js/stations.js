@@ -155,14 +155,16 @@ async function loadStationDetailView(slug, filter = "all") {
   `;
 
   try {
-    const [stationRes, postsRes] = await Promise.all([
+    const [stationRes, postsRes, leaderboardRes] = await Promise.all([
       apiRequest(`/api/stations/${encodeURIComponent(slug)}`),
-      apiRequest(`/api/posts?station=${encodeURIComponent(slug)}&type=${encodeURIComponent(filter)}`)
+      apiRequest(`/api/posts?station=${encodeURIComponent(slug)}&type=${encodeURIComponent(filter)}`),
+      apiRequest(`/api/stations/${encodeURIComponent(slug)}/leaderboard`).catch(() => ({ lead_cooks: [] }))
     ]);
 
     const station = stationRes.station;
     const posts = postsRes.posts || [];
     const isMember = Boolean(station.is_member);
+    const leadCooks = leaderboardRes?.lead_cooks || [];
 
     const bannerStyle = station.banner_url
       ? `background-image: linear-gradient(180deg, rgba(15,19,17,0.35) 0%, rgba(15,19,17,0.9) 100%), url('${escapeHtml(station.banner_url)}');`
@@ -223,9 +225,20 @@ async function loadStationDetailView(slug, filter = "all") {
       <!-- Station Main 2-Column Workstation Grid -->
       <div class="station-workstation-grid">
         
-        <!-- Left Column: Rules & Brigade -->
+        <!-- Left Column: Leaderboard, Rules & Brigade -->
         <aside class="station-sidebar-col">
           
+          <!-- Station Leaderboard -->
+          <div class="station-sidebar-card">
+            <div class="station-sidebar-header">
+              <span>🏆</span>
+              <h4>Station Leaderboard</h4>
+            </div>
+            <div class="station-leaderboard-list">
+              ${renderStationLeaderboard(leadCooks)}
+            </div>
+          </div>
+
           <!-- Station Rules Box -->
           <div class="station-sidebar-card">
             <div class="station-sidebar-header">
@@ -331,6 +344,33 @@ function renderBrigadeList(members) {
       </div>
     </div>
   `).join("");
+}
+
+function renderStationLeaderboard(leadCooks) {
+  if (!leadCooks || leadCooks.length === 0) {
+    return `<p style="font-size: 0.85rem; color: var(--text-light); text-align: center; padding: 0.75rem 0.25rem;">No station activity yet. Clock in and share your first dish!</p>`;
+  }
+
+  return leadCooks.map((chef, idx) => {
+    const rankClass = idx === 0 ? 'rank-1' : (idx === 1 ? 'rank-2' : (idx === 2 ? 'rank-3' : ''));
+    const rankBadge = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : (idx === 2 ? '🥉' : `#${idx + 1}`));
+    return `
+      <div class="leaderboard-item" onclick="openUserProfile('${escapeHtml(chef.username)}')">
+        <span class="leaderboard-rank-badge ${rankClass}">${rankBadge}</span>
+        <img src="${escapeHtml(chef.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" style="width: 28px; height: 28px;" />
+        <div style="min-width: 0; flex: 1;">
+          <div style="font-weight: 700; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            ${escapeHtml(chef.display_name || chef.username)}
+          </div>
+          <div style="font-size: 0.72rem; color: var(--text-light);">@${escapeHtml(chef.username)}</div>
+        </div>
+        <div class="leaderboard-stats">
+          <div>❤️ <b>${chef.likes_received || 0}</b></div>
+          <div>📝 ${chef.post_count || 0}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
 /**

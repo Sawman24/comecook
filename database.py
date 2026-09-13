@@ -215,6 +215,35 @@ def init_db():
         FOREIGN KEY (recipe_id) REFERENCES recipes (id) ON DELETE SET NULL
     );
 
+    -- 15. RECIPE REVIEWS / "I MADE THIS" REMAKES
+    CREATE TABLE IF NOT EXISTS recipe_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipe_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        rating INTEGER DEFAULT 5,
+        review TEXT DEFAULT '',
+        image_url TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (recipe_id) REFERENCES recipes (id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        UNIQUE (recipe_id, user_id)
+    );
+
+    -- 16. NOTIFICATIONS
+    CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        actor_id INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER,
+        message TEXT NOT NULL,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_id) REFERENCES users (id) ON DELETE CASCADE
+    );
+
     -- PERFORMANCE INDEXES
     CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
@@ -233,6 +262,9 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments (post_id, created_at ASC);
     CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships (user_id);
     CREATE INDEX IF NOT EXISTS idx_planner_user_date ON planner (user_id, plan_date);
+    CREATE INDEX IF NOT EXISTS idx_recipe_reviews_recipe ON recipe_reviews (recipe_id);
+    CREATE INDEX IF NOT EXISTS idx_recipe_reviews_user ON recipe_reviews (user_id);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, is_read, created_at DESC);
     """)
 
     # Dynamic migrations for existing databases
