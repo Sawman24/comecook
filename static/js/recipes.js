@@ -11,56 +11,119 @@ async function loadRecipesView(scope = "all") {
   const container = document.getElementById("main-content-view");
   if (!container) return;
 
+  const isHeroVisible = scope === "all";
+
   container.innerHTML = `
-    <div class="recipe-box-header">
-      <div>
-        <h2>Recipe Box</h2>
-        <p style="color: var(--text-muted); font-size: 0.88rem;">Your personal culinary vault & discovery engine</p>
+    ${isHeroVisible ? `
+      <!-- Kitchen Hub Hero Inspiration Banner -->
+      <div class="kitchen-hub-hero">
+        <div class="kitchen-hub-hero-content">
+          <div class="kitchen-hub-hero-tag">🌟 Chef's Daily Inspiration</div>
+          <h1>Artisan Sourdough Boule & Herb Butter</h1>
+          <p>Open airy crumb with blistered cast-iron crust. Master wild yeast fermentation, dough hydration, and Dutch oven steam baking.</p>
+          <div class="kitchen-hub-hero-actions">
+            <button class="btn-hero-primary" onclick="openRecipeEditorModal()">
+              <span>🍳</span> Write New Recipe
+            </button>
+            <button class="btn-hero-secondary" onclick="openScraperModal()">
+              <span>🔗</span> Import from Web URL
+            </button>
+          </div>
+        </div>
       </div>
-      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-        <button class="btn btn-secondary btn-sm" onclick="openScraperModal()">
-          <span>🔗</span> Import from Web
+    ` : `
+      <div class="recipe-box-header" style="margin-bottom: 1.25rem;">
+        <div>
+          <h2 style="font-size: 1.5rem; margin-bottom: 0.25rem;">${scope === 'mine' ? '👨‍🍳 My Recipe Vault' : '🔖 Saved Recipe Box'}</h2>
+          <p style="color: var(--text-muted); font-size: 0.88rem;">${scope === 'mine' ? 'Recipes crafted and adapted by you' : 'Your saved community bookmarks and favorites'}</p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="openScraperModal()">
+            <span>🔗</span> Import Web Recipe
+          </button>
+          <button class="btn btn-primary btn-sm" onclick="openRecipeEditorModal()">
+            <span>+</span> Write Recipe
+          </button>
+        </div>
+      </div>
+    `}
+
+    <!-- Top Trending Tags Strip (Compact 1-Line) -->
+    <div class="hub-trending-strip" id="trending-topics-bar">
+      <div class="hub-trending-label">🔥 Trending:</div>
+      <div class="hub-trending-tags-scroll" id="trending-topics-list">
+        <span class="trending-placeholder" style="font-size: 0.75rem; color: var(--text-light);">Loading tags...</span>
+      </div>
+    </div>
+
+    <!-- Segmented Navigation & Filter Bar -->
+    <div class="hub-control-bar">
+      <div class="segmented-control">
+        <button class="segmented-btn ${scope === 'all' ? 'active' : ''}" onclick="loadRecipesView('all')">
+          <span>🌟</span> Discover
         </button>
-        <button class="btn btn-primary btn-sm" onclick="openRecipeEditorModal()">
-          <span>+</span> Write Recipe
+        <button class="segmented-btn ${scope === 'mine' ? 'active' : ''}" onclick="loadRecipesView('mine')">
+          <span>👨‍🍳</span> My Box
+        </button>
+        <button class="segmented-btn ${scope === 'saved' ? 'active' : ''}" onclick="loadRecipesView('saved')">
+          <span>🔖</span> Saved Vault
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="filter-toggle-btn" id="recipe-filter-btn" onclick="toggleRecipeFilterDrawer()">
+          <span>⚙️</span> Filters <span style="font-size: 0.75rem;">▾</span>
         </button>
       </div>
     </div>
 
-    <!-- Search & Filter Controls -->
-    <div style="display: flex; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
-      <div class="recipe-tabs">
-        <button class="filter-chip ${scope === 'all' ? 'active' : ''}" onclick="loadRecipesView('all')">All Recipes</button>
-        <button class="filter-chip ${scope === 'mine' ? 'active' : ''}" onclick="loadRecipesView('mine')">My Recipes</button>
-        <button class="filter-chip ${scope === 'saved' ? 'active' : ''}" onclick="loadRecipesView('saved')">Saved Box</button>
-      </div>
-      <div style="margin-left: auto; display: flex; gap: 0.5rem;">
-        <select id="recipe-cuisine-filter" class="form-control" style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.82rem;" onchange="applyRecipeFilters()">
-          <option value="All">All Cuisines</option>
-          <option value="Italian">Italian</option>
-          <option value="French / Artisan">French / Artisan</option>
-          <option value="American">American</option>
-          <option value="Mexican">Mexican</option>
-          <option value="Asian">Asian</option>
-          <option value="Mediterranean">Mediterranean</option>
-        </select>
-        <select id="recipe-difficulty-filter" class="form-control" style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.82rem;" onchange="applyRecipeFilters()">
-          <option value="All">All Difficulties</option>
-          <option value="Easy">Easy</option>
-          <option value="Medium">Medium</option>
-          <option value="Advanced">Advanced</option>
-        </select>
+    <!-- Collapsible Filter Drawer -->
+    <div class="filter-drawer-panel" id="recipe-filter-drawer">
+      <div class="filter-drawer-grid">
+        <div class="filter-drawer-col">
+          <label>Cuisine</label>
+          <select id="recipe-cuisine-filter" class="form-control" style="font-size: 0.85rem;" onchange="applyRecipeFilters()">
+            <option value="All">All Cuisines</option>
+            <option value="Italian">Italian</option>
+            <option value="French / Artisan">French / Artisan</option>
+            <option value="American">American</option>
+            <option value="Mexican">Mexican</option>
+            <option value="Asian">Asian</option>
+            <option value="Mediterranean">Mediterranean</option>
+          </select>
+        </div>
+        <div class="filter-drawer-col">
+          <label>Difficulty</label>
+          <select id="recipe-difficulty-filter" class="form-control" style="font-size: 0.85rem;" onchange="applyRecipeFilters()">
+            <option value="All">All Difficulties</option>
+            <option value="Easy">Easy (&lt;30m)</option>
+            <option value="Medium">Medium</option>
+            <option value="Advanced">Advanced (Artisan)</option>
+          </select>
+        </div>
       </div>
     </div>
 
     <div id="recipe-grid-container" class="recipe-grid">
       <div style="grid-column: 1/-1; text-align: center; padding: 2rem; color: var(--text-light);">
-        Loading recipes...
+        Loading culinary vault...
       </div>
     </div>
   `;
 
+  if (typeof fetchAndRenderTrendingHashtags === "function") {
+    fetchAndRenderTrendingHashtags();
+  }
   await fetchAndRenderRecipes();
+}
+
+function toggleRecipeFilterDrawer() {
+  const drawer = document.getElementById("recipe-filter-drawer");
+  const btn = document.getElementById("recipe-filter-btn");
+  if (drawer) {
+    drawer.classList.toggle("open");
+    if (btn) btn.classList.toggle("has-filters", drawer.classList.contains("open"));
+  }
 }
 
 async function fetchAndRenderRecipes(customQuery = "") {
@@ -83,7 +146,7 @@ async function fetchAndRenderRecipes(customQuery = "") {
           <span style="font-size: 2.5rem; display: block; margin-bottom: 0.5rem;">📖</span>
           <h3>No recipes found</h3>
           <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem;">
-            ${currentRecipeScope === 'saved' ? 'Your saved recipe box is empty. Bookmark community recipes to see them here!' : 'Try adjusting your filters or create a new recipe!'}
+            ${currentRecipeScope === 'saved' ? 'Your saved recipe box is empty. Bookmark community recipes to see them here!' : 'Try adjusting your filters or write a new recipe!'}
           </p>
         </div>
       `;
@@ -101,15 +164,25 @@ function applyRecipeFilters() {
 }
 
 function renderRecipeCard(recipe) {
-  const tags = (recipe.tags || []).slice(0, 3).map(t => `<span class="badge badge-secondary">#${escapeHtml(t)}</span>`).join(" ");
+  const tags = (recipe.tags || []).slice(0, 3).map(t => `<span class="badge badge-secondary" style="font-size: 0.72rem;">#${escapeHtml(t)}</span>`).join(" ");
   const defaultImg = "https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=600&auto=format&fit=crop&q=80";
   const ratingHtml = recipe.avg_rating > 0 
     ? `<span class="recipe-rating-badge" title="${recipe.avg_rating} out of 5 stars (${recipe.reviews_count || 0} reviews)">★ ${recipe.avg_rating} <span style="opacity:0.75; font-weight:normal;">(${recipe.reviews_count || 0})</span></span>`
     : '';
 
+  const forkBadgeHtml = (recipe.fork_count && recipe.fork_count > 0)
+    ? `<span class="recipe-card-fork-pill" title="${recipe.fork_count} community variations/twists">🌿 ${recipe.fork_count}</span>`
+    : '';
+
+  const totalTime = (recipe.prep_time_min || 0) + (recipe.cook_time_min || 0);
+
   return `
     <div class="recipe-card" onclick="viewRecipeDetail(${recipe.id})">
-      <img class="recipe-card-img" src="${escapeHtml(recipe.image_url || defaultImg)}" alt="${escapeHtml(recipe.title)}" />
+      <div class="recipe-card-img-wrap">
+        <img src="${escapeHtml(recipe.image_url || defaultImg)}" alt="${escapeHtml(recipe.title)}" />
+        ${forkBadgeHtml}
+        <span class="recipe-card-time-pill">⏱️ ${totalTime > 0 ? totalTime + 'm' : '30m'}</span>
+      </div>
       <div class="recipe-card-body">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.35rem;">
           <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
@@ -121,19 +194,26 @@ function renderRecipeCard(recipe) {
           </button>
         </div>
         <h3 class="recipe-card-title">${escapeHtml(recipe.title)}</h3>
-        <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+        <p style="color: var(--text-muted); font-size: 0.82rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 0.5rem;">
           ${escapeHtml(recipe.description || '')}
         </p>
-        <div class="recipe-card-tags">${tags}</div>
+        <div class="recipe-card-tags" style="margin-bottom: 0.65rem;">${tags}</div>
         <div class="recipe-card-meta">
-          <span>⏱️ ${(recipe.prep_time_min || 0) + (recipe.cook_time_min || 0)}m</span>
-          <span>📊 ${escapeHtml(recipe.difficulty || 'Medium')}</span>
-          <span>🍽️ ${recipe.servings || 4} serv</span>
+          <span style="display: flex; align-items: center; gap: 0.3rem;">
+            <span>📊</span> ${escapeHtml(recipe.difficulty || 'Medium')}
+          </span>
+          <span style="display: flex; align-items: center; gap: 0.3rem;">
+            <span>🍽️</span> ${recipe.servings || 4} serv
+          </span>
+          <span style="margin-left: auto; font-size: 0.75rem; color: var(--text-light);">
+            by @${escapeHtml(recipe.author_username || 'chef')}
+          </span>
         </div>
       </div>
     </div>
   `;
 }
+
 
 async function viewRecipeDetail(recipeId) {
   try {

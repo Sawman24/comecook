@@ -2,7 +2,7 @@
    COOKED - Main App Router & View Controller
    ============================================================================== */
 
-let currentActiveView = "feed"; // 'feed', 'recipes', 'planner', 'profile'
+let currentActiveView = "recipes"; // 'recipes', 'feed', 'planner', 'stations', 'profile', 'admin'
 
 document.addEventListener("DOMContentLoaded", async () => {
   // Initialize Auth
@@ -10,6 +10,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Load Featured Chefs & Right Sidebar Content
   loadRightSidebarData();
+
+  // Initialize Converter
+  if (typeof runUnitConversion === "function") {
+    runUnitConversion();
+  }
 
   // Handle Password Reset Deep Links (e.g. /#/reset-password?token=... or ?token=...)
   const urlParams = new URLSearchParams(window.location.search);
@@ -56,10 +61,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else if (hash.startsWith("tag/")) {
     const tag = hash.split("/")[1];
     openHashtagFeed(tag);
-  } else if (["stations", "recipes", "planner", "admin"].includes(hash)) {
+  } else if (hash === "my-box" || hash === "my_box") {
+    navigateTo("recipes", "mine");
+  } else if (["stations", "recipes", "feed", "planner", "admin"].includes(hash)) {
     navigateTo(hash);
   } else {
-    navigateTo("feed");
+    navigateTo("recipes");
   }
 
   // Setup Global Search Input & Instant Live Dropdown
@@ -129,13 +136,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-function navigateTo(viewName) {
+function navigateTo(viewName, subScope = null) {
   currentActiveView = viewName;
-  window.location.hash = viewName;
+  window.location.hash = subScope ? `${viewName}?scope=${subScope}` : viewName;
+
+  const targetNavAttr = (viewName === "recipes" && subScope === "mine") ? "my_box" : viewName;
 
   // Update left sidebar active classes
   document.querySelectorAll(".nav-item").forEach(item => {
-    if (item.getAttribute("data-view") === viewName) {
+    if (item.getAttribute("data-view") === targetNavAttr) {
       item.classList.add("active");
     } else {
       item.classList.remove("active");
@@ -158,13 +167,219 @@ function navigateTo(viewName) {
   } else if (viewName === "stations") {
     loadStationsDirectoryView();
   } else if (viewName === "recipes") {
-    loadRecipesView("all");
+    loadRecipesView(subScope || "all");
+  } else if (viewName === "my_box") {
+    loadRecipesView("mine");
   } else if (viewName === "planner") {
     loadPlannerView();
   } else if (viewName === "admin") {
     loadAdminDashboardView();
   }
 }
+
+function openRecipeCreationMenu(event) {
+  if (event) event.preventDefault();
+  if (!currentUser) {
+    openAuthModal("login");
+    return;
+  }
+  openRecipeEditorModal();
+}
+
+/* ==============================================================================
+   RIGHT SIDEBAR: INTERACTIVE KITCHEN TIMER
+   ============================================================================== */
+
+let sidebarTimerSeconds = 0;
+let sidebarTimerInterval = null;
+let sidebarTimerRunning = false;
+
+function setSidebarTimer(minutes, label = "Timer") {
+  resetSidebarTimer();
+  sidebarTimerSeconds = minutes * 60;
+  const labelEl = document.getElementById("sidebar-timer-label");
+  if (labelEl) labelEl.textContent = label;
+  updateSidebarTimerDisplay();
+  startSidebarTimer();
+}
+
+function updateSidebarTimerDisplay() {
+  const digitsEl = document.getElementById("sidebar-timer-digits");
+  if (!digitsEl) return;
+  const m = Math.floor(sidebarTimerSeconds / 60);
+  const s = sidebarTimerSeconds % 60;
+  digitsEl.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function toggleSidebarTimer() {
+  if (sidebarTimerRunning) {
+    pauseSidebarTimer();
+  } else {
+    if (sidebarTimerSeconds <= 0) {
+      sidebarTimerSeconds = 5 * 60; // default 5m
+      updateSidebarTimerDisplay();
+    }
+    startSidebarTimer();
+  }
+}
+
+function startSidebarTimer() {
+  if (sidebarTimerRunning) return;
+  sidebarTimerRunning = true;
+  const toggleBtn = document.getElementById("sidebar-timer-toggle-btn");
+  const badge = document.getElementById("timer-status-badge");
+  if (toggleBtn) {
+    toggleBtn.textContent = "Pause";
+    toggleBtn.classList.remove("btn-primary");
+    toggleBtn.classList.add("btn-secondary");
+  }
+  if (badge) badge.style.display = "inline-block";
+
+  sidebarTimerInterval = setInterval(() => {
+    if (sidebarTimerSeconds > 0) {
+      sidebarTimerSeconds--;
+      updateSidebarTimerDisplay();
+      if (sidebarTimerSeconds === 0) {
+        onSidebarTimerComplete();
+      }
+    } else {
+      pauseSidebarTimer();
+    }
+  }, 1000);
+}
+
+function pauseSidebarTimer() {
+  sidebarTimerRunning = false;
+  clearInterval(sidebarTimerInterval);
+  const toggleBtn = document.getElementById("sidebar-timer-toggle-btn");
+  const badge = document.getElementById("timer-status-badge");
+  if (toggleBtn) {
+    toggleBtn.textContent = "Resume";
+    toggleBtn.classList.remove("btn-secondary");
+    toggleBtn.classList.add("btn-primary");
+  }
+  if (badge) badge.style.display = "none";
+}
+
+function resetSidebarTimer() {
+  sidebarTimerRunning = false;
+  clearInterval(sidebarTimerInterval);
+  sidebarTimerSeconds = 0;
+  updateSidebarTimerDisplay();
+  const toggleBtn = document.getElementById("sidebar-timer-toggle-btn");
+  const labelEl = document.getElementById("sidebar-timer-label");
+  const badge = document.getElementById("timer-status-badge");
+  if (toggleBtn) {
+    toggleBtn.textContent = "Start";
+    toggleBtn.classList.remove("btn-secondary");
+    toggleBtn.classList.add("btn-primary");
+  }
+  if (labelEl) labelEl.textContent = "Ready to time";
+  if (badge) badge.style.display = "none";
+}
+
+function onSidebarTimerComplete() {
+  pauseSidebarTimer();
+  const labelEl = document.getElementById("sidebar-timer-label");
+  if (labelEl) labelEl.textContent = "⏰ Time's Up!";
+  showToast("⏰ Kitchen Timer Complete!", "success", 4000);
+  playTimerChime();
+}
+
+function playTimerChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.15); // A5
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.8);
+  } catch (e) {
+    // audio context not allowed without prior interaction
+  }
+}
+
+/* ==============================================================================
+   RIGHT SIDEBAR: INSTANT MEASUREMENT CONVERTER
+   ============================================================================== */
+
+const UNIT_CONVERSIONS_ML = {
+  ml: 1,
+  tsp: 4.92892,
+  tbsp: 14.7868,
+  fl_oz: 29.5735,
+  cup: 236.588
+};
+
+const UNIT_CONVERSIONS_GRAMS = {
+  grams: 1,
+  oz: 28.3495,
+  butter_stick: 113.398
+};
+
+function runUnitConversion() {
+  const valInput = document.getElementById("converter-input-val");
+  const fromUnitEl = document.getElementById("converter-from-unit");
+  const toUnitEl = document.getElementById("converter-to-unit");
+  const resultBox = document.getElementById("converter-result-box");
+  if (!valInput || !fromUnitEl || !toUnitEl || !resultBox) return;
+
+  const val = parseFloat(valInput.value);
+  if (isNaN(val) || val < 0) {
+    resultBox.textContent = "--";
+    return;
+  }
+
+  const fromUnit = fromUnitEl.value;
+  const toUnit = toUnitEl.value;
+
+  if (fromUnit === toUnit) {
+    resultBox.textContent = `${val} ${fromUnit} = ${val} ${toUnit}`;
+    return;
+  }
+
+  let result = null;
+
+  // Volume to Volume
+  if (UNIT_CONVERSIONS_ML[fromUnit] && UNIT_CONVERSIONS_ML[toUnit]) {
+    const inMl = val * UNIT_CONVERSIONS_ML[fromUnit];
+    result = inMl / UNIT_CONVERSIONS_ML[toUnit];
+  } 
+  // Weight to Weight
+  else if (UNIT_CONVERSIONS_GRAMS[fromUnit] && UNIT_CONVERSIONS_GRAMS[toUnit]) {
+    const inG = val * UNIT_CONVERSIONS_GRAMS[fromUnit];
+    result = inG / UNIT_CONVERSIONS_GRAMS[toUnit];
+  }
+  // Cross approximations for standard water/butter density
+  else if (fromUnit === "butter_stick" && UNIT_CONVERSIONS_ML[toUnit]) {
+    const inMl = val * 118.294; // 1 stick = 1/2 cup = ~118ml
+    result = inMl / UNIT_CONVERSIONS_ML[toUnit];
+  } else if (fromUnit === "cup" && toUnit === "grams") {
+    result = val * 240; // approx liquid/flour 1 cup ~ 240g
+  } else if (fromUnit === "tbsp" && toUnit === "grams") {
+    result = val * 15;
+  } else if (fromUnit === "tsp" && toUnit === "grams") {
+    result = val * 5;
+  } else if (fromUnit === "grams" && toUnit === "cup") {
+    result = val / 240;
+  } else if (fromUnit === "grams" && toUnit === "tbsp") {
+    result = val / 15;
+  } else if (fromUnit === "grams" && toUnit === "tsp") {
+    result = val / 5;
+  } else {
+    result = val;
+  }
+
+  const formattedResult = Number.isInteger(result) ? result : parseFloat(result.toFixed(2));
+  resultBox.textContent = `${val} ${fromUnit} ≈ ${formattedResult} ${toUnit}`;
+}
+
 
 function refreshCurrentView() {
   navigateTo(currentActiveView);

@@ -22,47 +22,69 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
   const container = document.getElementById("main-content-view");
   if (!container) return;
 
+  const hasDietFilter = !!dietary;
+
   container.innerHTML = `
-    <!-- Trending Topics & Hashtags Bar -->
-    <div class="trending-topics-bar" id="trending-topics-bar">
-      <div class="trending-topics-label">🔥 Trending Topics:</div>
-      <div class="trending-topics-list" id="trending-topics-list">
-        <span class="trending-placeholder">Loading trending tags...</span>
+    <!-- Top Trending Tags Strip (Compact 1-Line) -->
+    <div class="hub-trending-strip" id="trending-topics-bar">
+      <div class="hub-trending-label">🔥 Trending:</div>
+      <div class="hub-trending-tags-scroll" id="trending-topics-list">
+        <span class="trending-placeholder" style="font-size: 0.75rem; color: var(--text-light);">Loading tags...</span>
       </div>
     </div>
 
-    <!-- Feed Filter Bar -->
-    <div class="feed-filter-bar">
-      <button class="filter-chip ${filter === 'all' && !dietary ? 'active' : ''}" onclick="loadCommunityFeedView('all', '')">🔥 All Feed</button>
-      <button class="filter-chip ${filter === 'for_you' ? 'active' : ''}" onclick="loadCommunityFeedView('for_you', '')">✨ For You</button>
-      <button class="filter-chip ${filter === 'following' ? 'active' : ''}" onclick="loadCommunityFeedView('following', '')">👥 Following</button>
-      <button class="filter-chip ${filter === 'trending' ? 'active' : ''}" onclick="loadCommunityFeedView('trending', '')">📈 Trending</button>
-      <button class="filter-chip ${filter === 'question' ? 'active' : ''}" onclick="loadCommunityFeedView('question', '')">❓ Kitchen Questions</button>
-      <button class="filter-chip ${filter === 'showcase' ? 'active' : ''}" onclick="loadCommunityFeedView('showcase', '')">📸 Showcases</button>
+    <!-- Feed Header & Segmented Filter Bar -->
+    <div class="hub-control-bar">
+      <div class="segmented-control">
+        <button class="segmented-btn ${filter === 'all' ? 'active' : ''}" onclick="loadCommunityFeedView('all', '${dietary}')">
+          <span>🔥</span> All Logs
+        </button>
+        <button class="segmented-btn ${filter === 'question' ? 'active' : ''}" onclick="loadCommunityFeedView('question', '${dietary}')">
+          <span>❓</span> Q&A & Advice
+        </button>
+        <button class="segmented-btn ${filter === 'showcase' ? 'active' : ''}" onclick="loadCommunityFeedView('showcase', '${dietary}')">
+          <span>📸</span> Showcases
+        </button>
+        <button class="segmented-btn ${filter === 'following' ? 'active' : ''}" onclick="loadCommunityFeedView('following', '${dietary}')">
+          <span>👥</span> Following
+        </button>
+      </div>
+
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="filter-toggle-btn ${hasDietFilter ? 'has-filters' : ''}" onclick="toggleDietaryFilterDrawer()">
+          <span>🥗</span> ${dietary ? capitalize(dietary) : 'Dietary Filters'}
+          <span style="font-size: 0.75rem;">▾</span>
+        </button>
+      </div>
     </div>
 
-    <!-- Dietary & Allergy Filter Bar -->
-    <div class="dietary-filter-bar">
-      <span class="dietary-label">Dietary:</span>
-      <button class="dietary-chip ${dietary === '' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', '')">All Diets</button>
-      <button class="dietary-chip ${dietary === 'vegetarian' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'vegetarian')">🌱 Vegetarian</button>
-      <button class="dietary-chip ${dietary === 'vegan' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'vegan')">🌿 Vegan</button>
-      <button class="dietary-chip ${dietary === 'gluten-free' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'gluten-free')">🌾 Gluten-Free</button>
-      <button class="dietary-chip ${dietary === 'keto' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'keto')">🥑 Keto</button>
-      <button class="dietary-chip ${dietary === 'quick' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'quick')">⚡ Quick (&lt;30m)</button>
+    <!-- Collapsible Dietary Filter Drawer -->
+    <div class="filter-drawer-panel" id="community-diet-drawer">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-light); text-transform: uppercase;">Dietary & Lifestyle Tags</span>
+        ${hasDietFilter ? `<button class="btn-text btn-sm" style="font-size: 0.75rem;" onclick="loadCommunityFeedView('${filter}', '')">Clear Filter</button>` : ''}
+      </div>
+      <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+        <button class="filter-chip ${dietary === '' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', '')">All Diets</button>
+        <button class="filter-chip ${dietary === 'vegetarian' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'vegetarian')">🌱 Vegetarian</button>
+        <button class="filter-chip ${dietary === 'vegan' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'vegan')">🌿 Vegan</button>
+        <button class="filter-chip ${dietary === 'gluten-free' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'gluten-free')">🌾 Gluten-Free</button>
+        <button class="filter-chip ${dietary === 'keto' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'keto')">🥑 Keto</button>
+        <button class="filter-chip ${dietary === 'quick' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'quick')">⚡ Quick (&lt;30m)</button>
+      </div>
     </div>
 
-    <!-- Create Post Card -->
-    <div class="create-post-card">
+    <!-- Create Post / Cook Log Card -->
+    <div class="create-post-card" style="margin-bottom: 1.25rem;">
       <div class="create-post-header">
         <img src="${escapeHtml(currentUser?.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
-        <input type="text" class="form-control" style="border-radius: var(--radius-full); cursor: pointer;" placeholder="Share a culinary tip, ask a cooking question, or start a poll..." onclick="openCreateModal()" readonly />
+        <input type="text" class="form-control" style="border-radius: var(--radius-full); cursor: pointer;" placeholder="Log a dish you cooked, share a culinary technique, or ask advice..." onclick="openCreateModal()" readonly />
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--border-subtle);">
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('showcase')">📸 Photo</button>
-          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('question')">❓ Ask Question</button>
-          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post', null, true)">📊 Add Poll</button>
+          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('question')">❓ Ask Advice</button>
+          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post', null, true)">📊 Poll</button>
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post')">🍲 Attach Recipe</button>
         </div>
         <button class="btn btn-primary btn-sm" onclick="openCreateModal()">Post</button>
@@ -71,13 +93,26 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
 
     <!-- Posts Container -->
     <div id="posts-stream-container">
-      <div style="text-align: center; padding: 2rem; color: var(--text-light);">Loading community feed...</div>
+      <div style="text-align: center; padding: 2rem; color: var(--text-light);">Loading kitchen logs...</div>
     </div>
   `;
 
   fetchAndRenderTrendingHashtags();
   await fetchAndRenderPosts();
 }
+
+function toggleDietaryFilterDrawer() {
+  const drawer = document.getElementById("community-diet-drawer");
+  if (drawer) {
+    drawer.classList.toggle("open");
+  }
+}
+
+function capitalize(s) {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 
 async function fetchAndRenderTrendingHashtags() {
   const container = document.getElementById("trending-topics-list");

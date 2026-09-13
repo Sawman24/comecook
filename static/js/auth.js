@@ -43,8 +43,8 @@ function updateAuthUI() {
   if (currentUser) {
     container.innerHTML = `
       <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <button class="btn btn-outline btn-sm" onclick="openCreateModal()">
-          <span style="font-size: 1.1rem; line-height: 1;">+</span> Share
+        <button class="btn btn-primary btn-sm" style="display: flex; align-items: center; gap: 0.35rem;" onclick="openRecipeCreationMenu(event)">
+          <span style="font-size: 1rem; line-height: 1;">🍳</span> + New Recipe
         </button>
         <div style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;" onclick="openUserProfile('${escapeHtml(currentUser.username)}')">
           <img src="${escapeHtml(currentUser.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" alt="${escapeHtml(currentUser.username)}" />
