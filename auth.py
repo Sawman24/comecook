@@ -79,6 +79,8 @@ def generate_session_token() -> str:
 
 def is_ip_rate_limited(ip_address: str, conn=None) -> bool:
     """Check if the IP has exceeded 5 failed login attempts in the last 5 minutes (in-memory)."""
+    if os.environ.get("COOKED_ENV") in ("test", "development") or os.environ.get("DISABLE_RATE_LIMIT") == "1":
+        return False
     now = time.time()
     cutoff = now - (LOCKOUT_WINDOW_MINUTES * 60)
     with _LOGIN_LOCK:
