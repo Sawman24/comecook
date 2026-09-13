@@ -23,6 +23,14 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
   if (!container) return;
 
   container.innerHTML = `
+    <!-- Trending Topics & Hashtags Bar -->
+    <div class="trending-topics-bar" id="trending-topics-bar">
+      <div class="trending-topics-label">🔥 Trending Topics:</div>
+      <div class="trending-topics-list" id="trending-topics-list">
+        <span class="trending-placeholder">Loading trending tags...</span>
+      </div>
+    </div>
+
     <!-- Feed Filter Bar -->
     <div class="feed-filter-bar">
       <button class="filter-chip ${filter === 'all' && !dietary ? 'active' : ''}" onclick="loadCommunityFeedView('all', '')">🔥 All Feed</button>
@@ -67,7 +75,124 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
     </div>
   `;
 
+  fetchAndRenderTrendingHashtags();
   await fetchAndRenderPosts();
+}
+
+async function fetchAndRenderTrendingHashtags() {
+  const container = document.getElementById("trending-topics-list");
+  if (!container) return;
+
+  try {
+    const data = await apiRequest("/api/hashtags/trending?limit=10");
+    const tags = data.trending_hashtags || [];
+    if (tags.length === 0) {
+      container.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-light);">#sourdough, #baking, #castiron, #comfortfood</span>`;
+      return;
+    }
+    container.innerHTML = tags.map(t => `
+      <button class="trending-tag-pill" onclick="openHashtagFeed('${escapeHtml(t.tag)}')">
+        #${escapeHtml(t.tag)} <span class="tag-count">${t.count}</span>
+      </button>
+    `).join("");
+  } catch (err) {
+    container.innerHTML = "";
+  }
+}
+
+async function openHashtagFeed(tagName) {
+  const cleanTag = tagName.replace(/^#/, "").trim().toLowerCase();
+  if (!cleanTag) return;
+
+  window.location.hash = `#/tag/${cleanTag}`;
+  const container = document.getElementById("main-content-view");
+  if (!container) return;
+
+  container.innerHTML = `
+    <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+      <button class="btn btn-secondary btn-sm" onclick="loadCommunityFeedView()">
+        ← Back to Main Feed
+      </button>
+      <button class="btn btn-primary btn-sm" onclick="openCreateModal('post', null, false, '#${cleanTag} ')">
+        ✍️ Post with #${escapeHtml(cleanTag)}
+      </button>
+    </div>
+
+    <!-- Hashtag Header Banner -->
+    <div class="hashtag-header-banner">
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <span class="hashtag-big-icon">🏷️</span>
+        <div>
+          <h1 style="font-size: 1.8rem; margin-bottom: 0.2rem; color: var(--text-main);">#${escapeHtml(cleanTag)}</h1>
+          <p id="hashtag-meta-text" style="color: var(--text-muted); font-size: 0.88rem; margin: 0;">Exploring tagged recipes and community dishes...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tagged Recipes Section -->
+    <div id="hashtag-recipes-section" style="margin-bottom: 2rem;">
+      <div style="text-align: center; padding: 1.5rem; color: var(--text-light);">Searching for #${escapeHtml(cleanTag)} recipes...</div>
+    </div>
+
+    <!-- Tagged Community Posts Section -->
+    <div id="hashtag-posts-section">
+      <div style="text-align: center; padding: 1.5rem; color: var(--text-light);">Searching for #${escapeHtml(cleanTag)} posts...</div>
+    </div>
+  `;
+
+  try {
+    const data = await apiRequest(`/api/hashtags/${encodeURIComponent(cleanTag)}`);
+    const metaEl = document.getElementById("hashtag-meta-text");
+    const recipesSec = document.getElementById("hashtag-recipes-section");
+    const postsSec = document.getElementById("hashtag-posts-section");
+
+    const recipes = data.recipes || [];
+    const posts = data.posts || [];
+    const totalCount = recipes.length + posts.length;
+
+    if (metaEl) {
+      metaEl.textContent = `${totalCount} culinary creation${totalCount === 1 ? '' : 's'} tagged with #${cleanTag}`;
+    }
+
+    if (recipesSec) {
+      if (recipes.length > 0) {
+        recipesSec.innerHTML = `
+          <h3 style="font-size: 1.2rem; margin-bottom: 1rem;">🍲 Recipes Tagged #${escapeHtml(cleanTag)} (${recipes.length})</h3>
+          <div class="recipes-grid">
+            ${recipes.map(r => renderRecipeCard(r)).join("")}
+          </div>
+        `;
+      } else {
+        recipesSec.innerHTML = "";
+      }
+    }
+
+    if (postsSec) {
+      if (posts.length > 0) {
+        postsSec.innerHTML = `
+          <h3 style="font-size: 1.2rem; margin-bottom: 1rem;">💬 Community Discussions & Snaps (${posts.length})</h3>
+          <div id="posts-stream-container">
+            ${posts.map(p => renderPostCard(p)).join("")}
+          </div>
+        `;
+      } else if (recipes.length === 0) {
+        postsSec.innerHTML = `
+          <div style="text-align: center; padding: 3rem 1rem; background: var(--bg-surface); border: 1px dashed var(--border-color); border-radius: var(--radius-lg);">
+            <span style="font-size: 2.5rem; display: block; margin-bottom: 0.5rem;">🏷️</span>
+            <h3>No dishes tagged with #${escapeHtml(cleanTag)} yet</h3>
+            <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem;">Be the first chef to post a recipe or snap with #${escapeHtml(cleanTag)}!</p>
+            <button class="btn btn-primary btn-sm" style="margin-top: 1rem;" onclick="openCreateModal('post', null, false, '#${cleanTag} ')">
+              Start #${escapeHtml(cleanTag)} Trend
+            </button>
+          </div>
+        `;
+      } else {
+        postsSec.innerHTML = "";
+      }
+    }
+  } catch (err) {
+    showToast("Error loading hashtag feed: " + err.message, "error");
+  }
 }
 
 async function fetchAndRenderPosts(searchQuery = "") {
@@ -98,6 +223,7 @@ async function fetchAndRenderPosts(searchQuery = "") {
     showToast("Error loading posts: " + err.message, "error");
   }
 }
+
 
 function renderPostCard(post) {
   const isOwner = currentUser && (currentUser.id === post.user_id || currentUser.is_admin === 1);

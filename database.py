@@ -4,11 +4,11 @@ import json
 from datetime import datetime, timezone, timedelta
 from werkzeug.security import generate_password_hash
 
-DB_PATH = os.environ.get("COOKED_DB_PATH", os.path.join(os.path.dirname(__file__), "cooked.db"))
+DB_PATH = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "cooked.db")))
 
 def get_db_connection():
     """Create a SQLite connection with foreign keys and WAL mode enabled."""
-    db_path = os.environ.get("COOKED_DB_PATH", DB_PATH)
+    db_path = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", DB_PATH))
     parent_dir = os.path.dirname(os.path.abspath(db_path))
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir, exist_ok=True)
@@ -89,10 +89,14 @@ def init_db():
         image_url TEXT DEFAULT '',
         source_url TEXT DEFAULT '',
         is_public INTEGER DEFAULT 1,
+        parent_recipe_id INTEGER DEFAULT NULL,
+        fork_notes TEXT DEFAULT '',
+        fork_count INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-        FOREIGN KEY (original_author_id) REFERENCES users (id) ON DELETE SET NULL
+        FOREIGN KEY (original_author_id) REFERENCES users (id) ON DELETE SET NULL,
+        FOREIGN KEY (parent_recipe_id) REFERENCES recipes (id) ON DELETE SET NULL
     );
 
     -- 6. SAVED RECIPES (Recipe Box bookmarks)
@@ -335,6 +339,25 @@ def init_db():
         UNIQUE (sender_id, recipient_id)
     );
 
+    -- 24. HASHTAGS (Culinary topics & tags)
+    CREATE TABLE IF NOT EXISTS hashtags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tag TEXT NOT NULL UNIQUE,
+        usage_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 25. HASHTAG REFERENCES (Tagged entities)
+    CREATE TABLE IF NOT EXISTS hashtag_references (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        hashtag_id INTEGER NOT NULL,
+        entity_type TEXT NOT NULL, -- 'recipe', 'post', 'review'
+        entity_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (hashtag_id) REFERENCES hashtags (id) ON DELETE CASCADE,
+        UNIQUE (hashtag_id, entity_type, entity_id)
+    );
+
     -- PERFORMANCE INDEXES
     CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
@@ -366,9 +389,28 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_message_requests_recipient ON message_requests (recipient_id, status);
     CREATE INDEX IF NOT EXISTS idx_message_requests_sender ON message_requests (sender_id, status);
     CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets (token, expires_at, used);
+    CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags (tag);
+    CREATE INDEX IF NOT EXISTS idx_hashtags_usage ON hashtags (usage_count DESC);
+    CREATE INDEX IF NOT EXISTS idx_hashtag_ref_entity ON hashtag_references (entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_hashtag_ref_tag_date ON hashtag_references (hashtag_id, created_at DESC);
     """)
 
     # Dynamic migrations for existing databases
+    for col, defn in [
+        ("parent_recipe_id", "INTEGER DEFAULT NULL REFERENCES recipes(id) ON DELETE SET NULL"),
+        ("fork_notes", "TEXT DEFAULT ''"),
+        ("fork_count", "INTEGER DEFAULT 0")
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE recipes ADD COLUMN {col} {defn};")
+        except Exception:
+            pass
+
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_recipes_parent ON recipes (parent_recipe_id);")
+    except Exception:
+        pass
+
     try:
         cursor.execute("ALTER TABLE community_posts ADD COLUMN station_id INTEGER REFERENCES stations(id) ON DELETE SET NULL;")
     except Exception:
@@ -405,6 +447,33 @@ def init_db():
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_requests_recipient ON message_requests (recipient_id, status);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_requests_sender ON message_requests (sender_id, status);")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hashtags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag TEXT NOT NULL UNIQUE,
+            usage_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hashtag_references (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hashtag_id INTEGER NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (hashtag_id) REFERENCES hashtags (id) ON DELETE CASCADE,
+            UNIQUE (hashtag_id, entity_type, entity_id)
+        );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags (tag);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hashtags_usage ON hashtags (usage_count DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hashtag_ref_entity ON hashtag_references (entity_type, entity_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hashtag_ref_tag_date ON hashtag_references (hashtag_id, created_at DESC);")
     except Exception:
         pass
 

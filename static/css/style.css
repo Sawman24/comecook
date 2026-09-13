@@ -3587,5 +3587,240 @@ textarea.form-control {
   100% { transform: scale(1); opacity: 1; }
 }
 
+/* ==============================================================================
+   RECIPE GENEALOGY & FORKS (TWISTS & ADAPTATIONS)
+   ============================================================================== */
 
+.recipe-lineage-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  background: linear-gradient(135deg, rgba(35, 93, 67, 0.08), rgba(217, 119, 6, 0.08));
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--secondary);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+}
 
+.lineage-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.lineage-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 0.25rem;
+}
+
+.lineage-link {
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.lineage-link:hover {
+  text-decoration: underline;
+}
+
+.lineage-chef-link {
+  color: var(--text-muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lineage-chef-link:hover {
+  color: var(--primary);
+}
+
+.lineage-twist-note {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 0.35rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--secondary);
+}
+
+/* Forks & Community Variations Grid */
+.forks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.25rem;
+  margin-top: 1rem;
+}
+
+.fork-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 1.15rem;
+  transition: var(--transition);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: var(--shadow-sm);
+}
+
+.fork-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: var(--shadow-md);
+}
+
+.fork-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.fork-card-title {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-main);
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+  line-height: 1.3;
+}
+
+.fork-card-title:hover {
+  color: var(--primary);
+}
+
+.fork-card-notes {
+  background: var(--bg-surface-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0.5rem 0 0.85rem 0;
+  line-height: 1.4;
+  border-left: 3px solid var(--secondary);
+}
+
+.fork-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-light);
+  margin-top: auto;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Editor Fork Banner */
+.editor-fork-banner {
+  background: linear-gradient(135deg, rgba(35, 93, 67, 0.08), rgba(217, 119, 6, 0.08));
+  border: 1px dashed var(--secondary);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+/* ==============================================================================
+   TRENDING TOPICS & HASHTAGS
+   ============================================================================== */
+
+.trending-topics-bar {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 1.15rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.trending-topics-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.trending-pills-list {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: thin;
+}
+
+.trending-pills-list::-webkit-scrollbar {
+  height: 4px;
+}
+
+.trending-pills-list::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: var(--radius-full);
+}
+
+.trending-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition);
+}
+
+.trending-tag-pill:hover {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.trending-tag-pill .tag-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-muted);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-full);
+}
+
+[data-theme="dark"] .trending-tag-pill .tag-count {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+
+.trending-tag-pill:hover .tag-count {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+/* Hashtag Header Banner */
+.hashtag-header-banner {
+  background: linear-gradient(135deg, var(--bg-surface), var(--bg-surface-subtle));
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 1.75rem;
+  margin-bottom: 1.75rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.hashtag-big-icon {
+  font-size: 2.2rem;
+  line-height: 1;
+  background: var(--primary-light);
+  border-radius: var(--radius-md);
+  padding: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}

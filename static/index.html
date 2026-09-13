@@ -264,7 +264,15 @@
       </div>
       <form onsubmit="handleRecipeEditorSubmit(event)">
         <input type="hidden" id="editor-recipe-id" value="" />
+        <input type="hidden" id="editor-parent-recipe-id" value="" />
         <div class="modal-body">
+          <div id="editor-fork-banner" style="display: none; background: #fff7ed; border-left: 4px solid var(--primary); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem;">
+            <div style="font-weight: 700; color: var(--primary); font-size: 0.88rem; margin-bottom: 0.25rem;">🌿 Recipe Fork / Twist</div>
+            <div id="editor-fork-attribution" style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.5rem;">Adapted from original recipe</div>
+            <label style="font-size: 0.82rem; font-weight: 600;">What's your twist / variation? (e.g. substitutions, secret seasoning)</label>
+            <input type="text" id="editor-fork-notes" class="form-control form-control-sm" placeholder="e.g. Swapped butter for olive oil, added smoked paprika & garlic" />
+          </div>
+
           <div class="form-group">
             <label>Recipe Title</label>
             <input type="text" id="editor-title" class="form-control" placeholder="e.g. Grandma's Braised Short Ribs" required />
@@ -381,6 +389,41 @@
           <button type="button" id="scraper-save-btn" class="btn btn-primary" style="display: none;" onclick="saveScrapedRecipeToBox()">
             💾 Save to My Recipe Box
           </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 4B. FORK & RECIPE TWIST MODAL -->
+  <div class="modal-backdrop" id="fork-modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🍴 Create a Recipe Twist / Fork</h3>
+        <button class="btn-icon" onclick="closeForkModal()">✕</button>
+      </div>
+      <form onsubmit="handleForkSubmit(event)">
+        <input type="hidden" id="fork-source-recipe-id" value="" />
+        <div class="modal-body">
+          <div style="background: var(--bg-surface); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 1rem;">
+            <div style="font-size: 0.82rem; color: var(--text-muted);">Forking from:</div>
+            <strong id="fork-source-title" style="font-size: 1.05rem; color: var(--text-main); display: block; margin-top: 0.2rem;">Recipe Title</strong>
+            <span id="fork-source-author" style="font-size: 0.82rem; color: var(--text-light);">by @author</span>
+          </div>
+
+          <div class="form-group">
+            <label>Your Recipe Twist Title</label>
+            <input type="text" id="fork-new-title" class="form-control" required placeholder="e.g. Spicy Garlic Focaccia" />
+          </div>
+
+          <div class="form-group">
+            <label>What's your creative twist or substitutions? (Optional)</label>
+            <textarea id="fork-twist-notes" class="form-control" rows="2" placeholder="e.g. Used sourdough discard instead of active yeast, added fresh rosemary & smoked flaky salt"></textarea>
+            <span class="help-text">This will be highlighted on your recipe and in the community twists tree!</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeForkModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">🍴 Fork & Open In Editor</button>
         </div>
       </form>
     </div>

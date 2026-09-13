@@ -408,6 +408,57 @@ def compute_user_badges(user_id: int, conn=None) -> list:
 
 
 # ==============================================================================
+# HASHTAG EXTRACTION & INDEXING HELPERS
+# ==============================================================================
+
+def extract_hashtags(text: str) -> list[str]:
+    """Extract unique lowercase hashtags (#sourdough, #baking_tips) from text."""
+    if not text:
+        return []
+    raw_tags = re.findall(r'#([a-zA-Z0-9_]{2,40})', str(text))
+    unique_tags = []
+    seen = set()
+    for tag in raw_tags:
+        cleaned = tag.strip().lower()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            unique_tags.append(cleaned)
+    return unique_tags
+
+
+def sync_entity_hashtags(cursor, entity_type: str, entity_id: int, tags: list[str]):
+    """Sync hashtags and update usage counts in database."""
+    try:
+        # Collect previous tags to update counts later
+        cursor.execute("SELECT hashtag_id FROM hashtag_references WHERE entity_type = ? AND entity_id = ?;", (entity_type, entity_id))
+        old_hashtag_ids = [row["hashtag_id"] for row in cursor.fetchall()]
+
+        cursor.execute("DELETE FROM hashtag_references WHERE entity_type = ? AND entity_id = ?;", (entity_type, entity_id))
+
+        all_affected = set(old_hashtag_ids)
+        for tag in tags:
+            tag_clean = tag.strip().lower().lstrip("#")
+            if not tag_clean or len(tag_clean) < 2:
+                continue
+            cursor.execute("INSERT OR IGNORE INTO hashtags (tag, usage_count) VALUES (?, 0);", (tag_clean,))
+            cursor.execute("SELECT id FROM hashtags WHERE tag = ?;", (tag_clean,))
+            tag_row = cursor.fetchone()
+            if tag_row:
+                h_id = tag_row["id"]
+                all_affected.add(h_id)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO hashtag_references (hashtag_id, entity_type, entity_id)
+                    VALUES (?, ?, ?);
+                """, (h_id, entity_type, entity_id))
+
+        # Recalculate usage_count for affected hashtags
+        for h_id in all_affected:
+            cursor.execute("SELECT COUNT(*) AS cnt FROM hashtag_references WHERE hashtag_id = ?;", (h_id,))
+            res = cursor.fetchone()
+            cnt = res["cnt"] if res else 0
+            cursor.execute("UPDATE hashtags SET usage_count = ? WHERE id = ?;", (cnt, h_id))
+    except Exception as e:
+        app.logger.warning(f"Error syncing hashtags for {entity_type} {entity_id}: {e}")
 # HEALTHCHECK & SYSTEM STATUS
 # ==============================================================================
 
@@ -1399,6 +1450,24 @@ def get_recipe_detail(recipe_id):
         recipe_dict["ingredients"] = []
         recipe_dict["steps"] = []
 
+    # Fetch Parent Recipe Lineage if this recipe is a fork
+    recipe_dict["parent_recipe"] = None
+    if recipe_dict.get("parent_recipe_id"):
+        cursor.execute("""
+            SELECT pr.id, pr.title, pr.user_id, pr.fork_notes,
+                   u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar
+            FROM recipes pr
+            JOIN users u ON pr.user_id = u.id
+            WHERE pr.id = ?;
+        """, (recipe_dict["parent_recipe_id"],))
+        p_row = cursor.fetchone()
+        if p_row:
+            recipe_dict["parent_recipe"] = dict(p_row)
+
+    # Community forks count
+    cursor.execute("SELECT COUNT(*) AS cnt FROM recipes WHERE parent_recipe_id = ? AND is_public = 1;", (recipe_id,))
+    recipe_dict["forks_count"] = cursor.fetchone()["cnt"]
+
     if current_user:
         cursor.execute("SELECT id, folder_name, notes FROM saved_recipes WHERE user_id = ? AND recipe_id = ?;", (current_user["id"], recipe_id))
         saved = cursor.fetchone()
@@ -1448,21 +1517,53 @@ def create_recipe():
     image_url = (data.get("image_url") or "").strip()
     source_url = (data.get("source_url") or "").strip()
     is_public = 1 if data.get("is_public", True) else 0
+    parent_recipe_id = data.get("parent_recipe_id")
+    fork_notes = (data.get("fork_notes") or "").strip()
 
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    original_author_id = None
+    if parent_recipe_id:
+        cursor.execute("SELECT id, user_id, original_author_id FROM recipes WHERE id = ?;", (parent_recipe_id,))
+        p_row = cursor.fetchone()
+        if p_row:
+            original_author_id = p_row["original_author_id"] or p_row["user_id"]
+            cursor.execute("UPDATE recipes SET fork_count = COALESCE(fork_count, 0) + 1 WHERE id = ?;", (parent_recipe_id,))
+
     cursor.execute("""
         INSERT INTO recipes (
-            user_id, title, description, prep_time_min, cook_time_min, servings,
+            user_id, original_author_id, parent_recipe_id, fork_notes, title, description, prep_time_min, cook_time_min, servings,
             difficulty, cuisine, tags_json, ingredients_json, steps_json,
             image_url, source_url, is_public
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """, (
-        g.current_user["id"], title, description, prep_time, cook_time, servings,
+        g.current_user["id"], original_author_id, parent_recipe_id, fork_notes, title, description, prep_time, cook_time, servings,
         difficulty, cuisine, json.dumps(tags), json.dumps(ingredients), json.dumps(steps),
         image_url, source_url, is_public
     ))
     recipe_id = cursor.lastrowid
+
+    # Auto-index hashtags from title, description, and tags
+    extracted_tags = extract_hashtags(f"{title} {description} {fork_notes}")
+    if isinstance(tags, list):
+        for t in tags:
+            extracted_tags.extend(extract_hashtags(str(t)))
+            if isinstance(t, str) and t.strip():
+                extracted_tags.append(t.strip().lower())
+    sync_entity_hashtags(cursor, "recipe", recipe_id, extracted_tags)
+
+    if parent_recipe_id and original_author_id and original_author_id != g.current_user["id"]:
+        create_notification(
+            user_id=original_author_id,
+            actor_id=g.current_user["id"],
+            notif_type="fork",
+            entity_type="recipe",
+            entity_id=recipe_id,
+            message=f"@{g.current_user['username']} created a twist on your recipe: '{title}'.",
+            conn=conn
+        )
+
     conn.commit()
     conn.close()
 
@@ -1514,18 +1615,29 @@ def update_recipe(recipe_id):
     image_url = (data.get("image_url") or "").strip()
     source_url = (data.get("source_url") or "").strip()
     is_public = 1 if data.get("is_public", True) else 0
+    fork_notes = (data.get("fork_notes") or "").strip()
 
     cursor.execute("""
         UPDATE recipes SET
-            title = ?, description = ?, prep_time_min = ?, cook_time_min = ?, servings = ?,
+            title = ?, description = ?, fork_notes = ?, prep_time_min = ?, cook_time_min = ?, servings = ?,
             difficulty = ?, cuisine = ?, tags_json = ?, ingredients_json = ?, steps_json = ?,
             image_url = ?, source_url = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?;
     """, (
-        title, description, prep_time, cook_time, servings,
+        title, description, fork_notes, prep_time, cook_time, servings,
         difficulty, cuisine, json.dumps(tags), json.dumps(ingredients), json.dumps(steps),
         image_url, source_url, is_public, recipe_id
     ))
+
+    # Sync hashtags
+    extracted_tags = extract_hashtags(f"{title} {description} {fork_notes}")
+    if isinstance(tags, list):
+        for t in tags:
+            extracted_tags.extend(extract_hashtags(str(t)))
+            if isinstance(t, str) and t.strip():
+                extracted_tags.append(t.strip().lower())
+    sync_entity_hashtags(cursor, "recipe", recipe_id, extracted_tags)
+
     conn.commit()
     conn.close()
 
@@ -1549,6 +1661,7 @@ def delete_recipe(recipe_id):
         return jsonify({"error": "Forbidden", "message": "You can only delete your own recipes"}), 403
 
     cursor.execute("DELETE FROM recipes WHERE id = ?;", (recipe_id,))
+    cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'recipe' AND entity_id = ?;", (recipe_id,))
     conn.commit()
     conn.close()
 
@@ -1592,21 +1705,51 @@ def fork_recipe(recipe_id):
         conn.close()
         return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
 
-    new_title = f"{orig['title']} (My Fork)"
+    data = request.get_json(silent=True) or {}
+    new_title = (data.get("title") or f"{orig['title']} (My Fork)").strip()
+    description = (data.get("description") or orig["description"]).strip()
+    fork_notes = (data.get("fork_notes") or "").strip()
+    prep_time = int(data.get("prep_time_min") if data.get("prep_time_min") is not None else orig["prep_time_min"] or 0)
+    cook_time = int(data.get("cook_time_min") if data.get("cook_time_min") is not None else orig["cook_time_min"] or 0)
+    servings = int(data.get("servings") if data.get("servings") is not None else orig["servings"] or 4)
+    difficulty = data.get("difficulty") or orig["difficulty"] or "Medium"
+    cuisine = data.get("cuisine") or orig["cuisine"] or "Global"
+    tags_json = json.dumps(data.get("tags")) if "tags" in data else orig["tags_json"]
+    ingredients_json = json.dumps(data.get("ingredients")) if "ingredients" in data else orig["ingredients_json"]
+    steps_json = json.dumps(data.get("steps")) if "steps" in data else orig["steps_json"]
+    image_url = (data.get("image_url") if "image_url" in data else orig["image_url"]) or ""
+    source_url = (data.get("source_url") if "source_url" in data else orig["source_url"]) or ""
+
+    original_author_id = orig["original_author_id"] or orig["user_id"]
+
     cursor.execute("""
         INSERT INTO recipes (
-            user_id, original_author_id, title, description, prep_time_min, cook_time_min,
+            user_id, original_author_id, parent_recipe_id, fork_notes, title, description, prep_time_min, cook_time_min,
             servings, difficulty, cuisine, tags_json, ingredients_json, steps_json,
             image_url, source_url, is_public
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
     """, (
-        g.current_user["id"], orig["user_id"], new_title, orig["description"],
-        orig["prep_time_min"], orig["cook_time_min"], orig["servings"],
-        orig["difficulty"], orig["cuisine"], orig["tags_json"], orig["ingredients_json"],
-        orig["steps_json"], orig["image_url"], orig["source_url"]
+        g.current_user["id"], original_author_id, orig["id"], fork_notes, new_title, description,
+        prep_time, cook_time, servings, difficulty, cuisine, tags_json, ingredients_json,
+        steps_json, image_url, source_url
     ))
     new_id = cursor.lastrowid
-    conn.commit()
+
+    # Increment parent recipe fork counter
+    cursor.execute("UPDATE recipes SET fork_count = COALESCE(fork_count, 0) + 1 WHERE id = ?;", (orig["id"],))
+
+    # Sync hashtags
+    extracted_tags = extract_hashtags(f"{new_title} {description} {fork_notes}")
+    try:
+        parsed_tags = json.loads(tags_json)
+        if isinstance(parsed_tags, list):
+            for t in parsed_tags:
+                extracted_tags.extend(extract_hashtags(str(t)))
+                if isinstance(t, str) and t.strip():
+                    extracted_tags.append(t.strip().lower())
+    except Exception:
+        pass
+    sync_entity_hashtags(cursor, "recipe", new_id, extracted_tags)
 
     if orig["user_id"] != g.current_user["id"]:
         create_notification(
@@ -1614,15 +1757,67 @@ def fork_recipe(recipe_id):
             actor_id=g.current_user["id"],
             notif_type="fork",
             entity_type="recipe",
-            entity_id=orig["id"],
-            message=f"@{g.current_user['username']} forked your recipe '{orig['title']}'.",
+            entity_id=new_id,
+            message=f"@{g.current_user['username']} created a twist on your recipe '{orig['title']}'.",
             conn=conn
         )
-        conn.commit()
 
+    conn.commit()
     conn.close()
 
-    return jsonify({"success": True, "message": "Recipe forked to your Recipe Box!", "recipe_id": new_id}), 201
+    return jsonify({
+        "success": True,
+        "message": "Recipe forked to your Recipe Box!",
+        "recipe_id": new_id,
+        "forked_from": {"id": orig["id"], "title": orig["title"]}
+    }), 201
+
+@app.route("/api/recipes/<int:recipe_id>/forks", methods=["GET"])
+def get_recipe_forks(recipe_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, title, user_id, parent_recipe_id, fork_count FROM recipes WHERE id = ?;", (recipe_id,))
+    orig = cursor.fetchone()
+    if not orig:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipe not found"}), 404
+
+    parent_recipe = None
+    if orig["parent_recipe_id"]:
+        cursor.execute("""
+            SELECT pr.id, pr.title, pr.user_id, pr.fork_notes,
+                   u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar
+            FROM recipes pr
+            JOIN users u ON pr.user_id = u.id
+            WHERE pr.id = ?;
+        """, (orig["parent_recipe_id"],))
+        p_row = cursor.fetchone()
+        parent_recipe = dict(p_row) if p_row else None
+
+    cursor.execute("""
+        SELECT r.id, r.title, r.description, r.fork_notes, r.image_url, r.created_at,
+               r.prep_time_min, r.cook_time_min, r.difficulty, r.cuisine,
+               u.id AS author_id, u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar,
+               ROUND((SELECT AVG(rating) FROM recipe_reviews rr WHERE rr.recipe_id = r.id), 1) AS avg_rating,
+               (SELECT COUNT(*) FROM recipe_reviews rr WHERE rr.recipe_id = r.id) AS reviews_count
+        FROM recipes r
+        JOIN users u ON r.user_id = u.id
+        WHERE r.parent_recipe_id = ? AND r.is_public = 1
+        ORDER BY r.created_at DESC;
+    """, (recipe_id,))
+    forks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "recipe_id": recipe_id,
+        "recipe_title": orig["title"],
+        "parent_recipe": parent_recipe,
+        "forks_count": len(forks),
+        "total_forks": len(forks),
+        "forks": forks
+    })
 
 @app.route("/api/recipes/scrape", methods=["POST"])
 @require_auth
@@ -2248,7 +2443,9 @@ def create_post():
                     VALUES (?, ?, ?);
                 """, (post_id, q, json.dumps(opts[:5])))
 
-    conn.commit()
+    # Hashtag extraction & indexing
+    extracted_tags = extract_hashtags(content)
+    sync_entity_hashtags(cursor, "post", post_id, extracted_tags)
 
     # Mention extraction & notifications
     snippet = content[:40]
@@ -2261,6 +2458,7 @@ def create_post():
         conn=conn
     )
 
+    conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "Post published", "post_id": post_id}), 201
 
@@ -2280,10 +2478,101 @@ def delete_post(post_id):
         conn.close()
         return jsonify({"error": "Forbidden", "message": "You can only delete your own posts"}), 403
 
+    sync_entity_hashtags(cursor, "post", post_id, [])
     cursor.execute("DELETE FROM community_posts WHERE id = ?;", (post_id,))
     conn.commit()
     conn.close()
     return jsonify({"success": True, "message": "Post deleted"})
+
+# ==============================================================================
+# HASHTAG DISCOVERY & TRENDING TOPICS
+# ==============================================================================
+
+@app.route("/api/hashtags/trending", methods=["GET"])
+def get_trending_hashtags():
+    limit = min(int(request.args.get("limit", 10)), 30)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT h.id, h.tag, h.usage_count,
+               (SELECT COUNT(*) FROM hashtag_references hr WHERE hr.hashtag_id = h.id AND hr.created_at >= datetime('now', '-7 days')) AS recent_count
+        FROM hashtags h
+        WHERE h.usage_count > 0
+        ORDER BY recent_count DESC, h.usage_count DESC
+        LIMIT ?;
+    """, (limit,))
+    rows = cursor.fetchall()
+    tags = [{"id": r["id"], "tag": r["tag"], "count": r["usage_count"], "recent_count": r["recent_count"]} for r in rows]
+    conn.close()
+    return jsonify({"success": True, "trending_hashtags": tags, "trending": tags})
+
+@app.route("/api/hashtags/<string:tag_name>", methods=["GET"])
+def get_hashtag_feed(tag_name):
+    cleaned_tag = tag_name.strip().lower().lstrip("#")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, tag, usage_count FROM hashtags WHERE tag = ?;", (cleaned_tag,))
+    tag_info = cursor.fetchone()
+    if not tag_info:
+        conn.close()
+        return jsonify({"success": True, "tag": cleaned_tag, "usage_count": 0, "recipes": [], "posts": []})
+
+    # Fetch matching recipes
+    cursor.execute("""
+        SELECT r.*,
+               u.username AS author_username, u.display_name AS author_display_name, u.avatar_url AS author_avatar,
+               ROUND((SELECT AVG(rating) FROM recipe_reviews rr WHERE rr.recipe_id = r.id), 1) AS avg_rating,
+               (SELECT COUNT(*) FROM recipe_reviews rr WHERE rr.recipe_id = r.id) AS reviews_count
+        FROM recipes r
+        JOIN hashtag_references hr ON hr.entity_type = 'recipe' AND hr.entity_id = r.id
+        JOIN users u ON r.user_id = u.id
+        WHERE hr.hashtag_id = ? AND r.is_public = 1
+        ORDER BY r.created_at DESC
+        LIMIT 30;
+    """, (tag_info["id"],))
+    recipe_rows = cursor.fetchall()
+    recipes = []
+    for r in recipe_rows:
+        rd = dict(r)
+        try:
+            rd["tags"] = json.loads(rd["tags_json"])
+            rd["ingredients"] = json.loads(rd["ingredients_json"])
+            rd["steps"] = json.loads(rd["steps_json"])
+        except Exception:
+            rd["tags"] = []
+            rd["ingredients"] = []
+            rd["steps"] = []
+        recipes.append(rd)
+
+    # Fetch matching posts
+    cursor.execute("""
+        SELECT p.id, p.user_id, p.content, p.image_url, p.recipe_id, p.station_id, p.post_type, p.created_at,
+               u.username, u.display_name, u.avatar_url, u.is_verified,
+               r.title AS recipe_title, r.image_url AS recipe_image,
+               st.name AS station_name, st.slug AS station_slug, st.icon AS station_icon,
+               (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS like_count,
+               (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id AND c.is_hidden = 0) AS comment_count
+        FROM community_posts p
+        JOIN hashtag_references hr ON hr.entity_type = 'post' AND hr.entity_id = p.id
+        JOIN users u ON p.user_id = u.id
+        LEFT JOIN recipes r ON p.recipe_id = r.id
+        LEFT JOIN stations st ON p.station_id = st.id
+        WHERE hr.hashtag_id = ? AND p.is_hidden = 0
+        ORDER BY p.created_at DESC
+        LIMIT 30;
+    """, (tag_info["id"],))
+    posts = [dict(p) for p in cursor.fetchall()]
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "tag": cleaned_tag,
+        "usage_count": tag_info["usage_count"],
+        "recipes": recipes,
+        "posts": posts
+    })
 
 @app.route("/api/posts/<int:post_id>/like", methods=["POST", "DELETE"])
 @require_auth

@@ -142,6 +142,7 @@ async function viewRecipeDetail(recipeId) {
     currentServingsScale = 1.0;
     renderRecipeDetailView();
     fetchAndRenderRecipeReviews(recipeId);
+    fetchAndRenderRecipeForks(recipeId);
   } catch (err) {
     showToast("Error opening recipe: " + err.message, "error");
   }
@@ -158,7 +159,7 @@ function renderRecipeDetailView() {
   const currentServings = Math.max(1, Math.round(baseServings * currentServingsScale));
   const isOwner = currentUser && (currentUser.id === r.user_id || currentUser.is_admin === 1);
 
-  const tagsHtml = (r.tags || []).map(t => `<span class="badge badge-secondary">#${escapeHtml(t)}</span>`).join(" ");
+  const tagsHtml = (r.tags || []).map(t => `<span class="badge badge-secondary" style="cursor: pointer;" onclick="openHashtagFeed('${escapeHtml(t)}')">#${escapeHtml(t)}</span>`).join(" ");
 
   // Scale ingredients
   const ingredientsHtml = (r.ingredients || []).map((ing, idx) => {
@@ -178,17 +179,33 @@ function renderRecipeDetailView() {
   // Instructions step by step
   const stepsHtml = (r.steps || []).map((st, idx) => {
     return `
-      <div class="instruction-step" id="step-row-${idx}">
-        <div class="step-num">${st.step_number || (idx + 1)}</div>
-        <div class="step-content">
-          <label class="step-check">
-            <input type="checkbox" onchange="toggleStepComplete(${idx}, this)" />
-            <span class="step-instruction">${escapeHtml(st.instruction)}</span>
-          </label>
-        </div>
+      <div class="instruction-step-item" id="step-row-${idx}">
+        <input type="checkbox" class="step-checkbox" onchange="toggleStepComplete(${idx}, this)" id="step-chk-${idx}" />
+        <label class="step-content" for="step-chk-${idx}">
+          <span class="step-num">${st.step_number || idx + 1}</span>
+          <p class="step-text">${escapeHtml(st.instruction)}</p>
+        </label>
       </div>
     `;
   }).join("");
+
+  // Lineage attribution banner if this recipe is a fork
+  let lineageBannerHtml = "";
+  if (r.parent_recipe) {
+    lineageBannerHtml = `
+      <div class="recipe-lineage-banner" onclick="viewRecipeDetail(${r.parent_recipe.id})">
+        <span style="font-size: 1.4rem;">🌿</span>
+        <div style="flex: 1;">
+          <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: var(--primary);">Recipe Genealogy • Community Twist</div>
+          <div style="font-size: 0.95rem; font-weight: 700; color: var(--text-main);">
+            Adapted from <span style="text-decoration: underline; color: var(--primary);">${escapeHtml(r.parent_recipe.title)}</span> by Chef @${escapeHtml(r.parent_recipe.author_username)}
+          </div>
+          ${r.fork_notes ? `<div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem; font-style: italic;">“${escapeHtml(r.fork_notes)}”</div>` : ''}
+        </div>
+        <span class="btn btn-outline btn-sm" style="font-size: 0.75rem;">View Original</span>
+      </div>
+    `;
+  }
 
   container.innerHTML = `
     <div style="margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
@@ -202,8 +219,8 @@ function renderRecipeDetailView() {
         <button class="btn btn-outline btn-sm" onclick="toggleSaveRecipe(${r.id})">
           ${r.is_saved ? '❤️ Saved to Box' : '🤍 Save to Box'}
         </button>
-        <button class="btn btn-secondary btn-sm" onclick="forkRecipe(${r.id})">
-          🍴 Fork Recipe
+        <button class="btn btn-secondary btn-sm" onclick="openForkModal(${r.id})">
+          🍴 Fork Recipe ${r.forks_count > 0 ? `(${r.forks_count})` : ''}
         </button>
         ${isOwner ? `
           <button class="btn btn-secondary btn-sm" onclick="openRecipeEditorModal(${r.id})">✏️ Edit</button>
@@ -211,6 +228,8 @@ function renderRecipeDetailView() {
         ` : ''}
       </div>
     </div>
+
+    ${lineageBannerHtml}
 
     <!-- Recipe Hero Banner -->
     <div class="recipe-detail-header">
@@ -235,7 +254,7 @@ function renderRecipeDetailView() {
             <span style="font-weight: 700; font-size: 0.9rem; cursor: pointer;" onclick="openUserProfile('${escapeHtml(r.author_username)}')">
               Chef ${escapeHtml(r.author_display_name || r.author_username)}
             </span>
-            ${r.orig_author_username ? `<span style="font-size: 0.78rem; color: var(--text-light); display: block;">Forked from @${escapeHtml(r.orig_author_username)}</span>` : ''}
+            ${r.parent_recipe ? `<span style="font-size: 0.78rem; color: var(--text-light); display: block;">Forked from @${escapeHtml(r.parent_recipe.author_username)}</span>` : ''}
           </div>
         </div>
 
@@ -297,6 +316,25 @@ function renderRecipeDetailView() {
       </div>
     </div>
 
+    <!-- Community Variations & Forks Section -->
+    <div class="remakes-section" id="recipe-forks-section" style="margin-bottom: 1.5rem;">
+      <div class="remakes-header">
+        <div>
+          <h3 style="font-size: 1.3rem; margin-bottom: 0.25rem;">🌿 Community Twists & Variations (${r.forks_count || 0})</h3>
+          <p style="color: var(--text-muted); font-size: 0.85rem;">Recipes adapted and remixed from this dish by fellow chefs.</p>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="openForkModal(${r.id})">
+          <span>🍴</span> Create a Twist
+        </button>
+      </div>
+
+      <div id="recipe-forks-content">
+        <div style="text-align: center; padding: 1.5rem; color: var(--text-light); font-size: 0.88rem;">
+          Loading community variations...
+        </div>
+      </div>
+    </div>
+
     <!-- Community Remakes & Reviews Section -->
     <div class="remakes-section" id="recipe-reviews-section">
       <div class="remakes-header">
@@ -316,6 +354,108 @@ function renderRecipeDetailView() {
       </div>
     </div>
   `;
+}
+
+async function fetchAndRenderRecipeForks(recipeId) {
+  const container = document.getElementById("recipe-forks-content");
+  if (!container) return;
+
+  try {
+    const data = await apiRequest(`/api/recipes/${recipeId}/forks`);
+    const forks = data.forks || [];
+
+    if (forks.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 2rem 1rem; background: var(--bg-surface); border: 1px dashed var(--border-color); border-radius: var(--radius-md);">
+          <span style="font-size: 2rem; display: block; margin-bottom: 0.35rem;">🌿</span>
+          <h4>No variations created yet</h4>
+          <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Be the first chef to put your own creative spin on this recipe!</p>
+          <button class="btn btn-secondary btn-sm" style="margin-top: 0.75rem;" onclick="openForkModal(${recipeId})">
+            🍴 Create a Twist
+          </button>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = `
+      <div class="forks-grid">
+        ${forks.map(f => `
+          <div class="fork-card" onclick="viewRecipeDetail(${f.id})">
+            <div class="fork-card-header">
+              <img src="${escapeHtml(f.author_avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
+              <div>
+                <span style="font-weight: 700; font-size: 0.88rem; display: block;">${escapeHtml(f.title)}</span>
+                <span style="font-size: 0.75rem; color: var(--text-light);">by @${escapeHtml(f.author_username)}</span>
+              </div>
+            </div>
+            ${f.fork_notes ? `
+              <div class="fork-card-notes">
+                <span style="color: var(--primary); font-weight: 600;">Twist:</span> “${escapeHtml(f.fork_notes)}”
+              </div>
+            ` : ''}
+            <div class="fork-card-footer">
+              <span style="font-size: 0.78rem; color: var(--text-light);">⏱️ ${(f.prep_time_min || 0) + (f.cook_time_min || 0)}m</span>
+              <span style="font-size: 0.78rem; color: #d97706;">${f.avg_rating > 0 ? `★ ${f.avg_rating}` : 'New Twist'}</span>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  } catch (err) {
+    container.innerHTML = `<div style="text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 0.85rem;">No variations found.</div>`;
+  }
+}
+
+function openForkModal(recipeId) {
+  if (!currentUser) {
+    openAuthModal("login");
+    return;
+  }
+  const r = (activeRecipeDetail && activeRecipeDetail.id === recipeId) ? activeRecipeDetail : null;
+  const modal = document.getElementById("fork-modal");
+  if (!modal) {
+    forkRecipe(recipeId);
+    return;
+  }
+
+  document.getElementById("fork-source-recipe-id").value = recipeId;
+  document.getElementById("fork-source-title").textContent = r ? r.title : `Recipe #${recipeId}`;
+  document.getElementById("fork-source-author").textContent = r ? `by @${r.author_username || 'Chef'}` : "";
+  document.getElementById("fork-new-title").value = r ? `${r.title} (My Twist)` : "My Recipe Twist";
+  document.getElementById("fork-twist-notes").value = "";
+
+  modal.classList.add("show");
+}
+
+function closeForkModal() {
+  const modal = document.getElementById("fork-modal");
+  if (modal) modal.classList.remove("show");
+}
+
+async function handleForkSubmit(e) {
+  e.preventDefault();
+  const recipeId = document.getElementById("fork-source-recipe-id").value;
+  const title = document.getElementById("fork-new-title").value.trim();
+  const fork_notes = document.getElementById("fork-twist-notes").value.trim();
+
+  if (!title) {
+    showToast("Please enter a title for your recipe twist", "error");
+    return;
+  }
+
+  try {
+    const res = await apiRequest(`/api/recipes/${recipeId}/fork`, {
+      method: "POST",
+      body: JSON.stringify({ title, fork_notes })
+    });
+    showToast("Recipe forked! Opening editor for your customizations...", "success");
+    closeForkModal();
+    await viewRecipeDetail(res.recipe_id);
+    openRecipeEditorModal(res.recipe_id);
+  } catch (err) {
+    showToast("Fork error: " + err.message, "error");
+  }
 }
 
 function adjustServingsScale(delta) {
@@ -364,17 +504,7 @@ async function toggleSaveRecipe(recipeId, btnEl) {
 }
 
 async function forkRecipe(recipeId) {
-  if (!currentUser) {
-    openAuthModal("login");
-    return;
-  }
-  try {
-    const data = await apiRequest(`/api/recipes/${recipeId}/fork`, { method: "POST" });
-    showToast(data.message, "success");
-    viewRecipeDetail(data.recipe_id);
-  } catch (err) {
-    showToast("Fork error: " + err.message, "error");
-  }
+  openForkModal(recipeId);
 }
 
 async function deleteRecipe(recipeId) {
@@ -440,6 +570,26 @@ function openRecipeEditorModal(recipeIdToEdit = null) {
   document.getElementById("editor-cuisine").value = r.cuisine || "Global";
   document.getElementById("editor-tags").value = (r.tags || []).join(", ");
   document.getElementById("editor-image-url").value = r.image_url || "";
+
+  // Fork / Lineage Banner in Editor
+  const forkBanner = document.getElementById("editor-fork-banner");
+  const parentIdInput = document.getElementById("editor-parent-recipe-id");
+  const forkNotesInput = document.getElementById("editor-fork-notes");
+  if (forkBanner && parentIdInput) {
+    if (r.parent_recipe_id) {
+      parentIdInput.value = r.parent_recipe_id;
+      forkNotesInput.value = r.fork_notes || "";
+      const attrEl = document.getElementById("editor-fork-attribution");
+      if (attrEl && r.parent_recipe) {
+        attrEl.textContent = `Adapted from ${r.parent_recipe.title} by @${r.parent_recipe.author_username}`;
+      }
+      forkBanner.style.display = "block";
+    } else {
+      parentIdInput.value = "";
+      forkNotesInput.value = "";
+      forkBanner.style.display = "none";
+    }
+  }
 
   renderEditorIngredients();
   renderEditorSteps();
@@ -521,6 +671,8 @@ async function handleRecipeEditorSubmit(e) {
   const cuisine = document.getElementById("editor-cuisine").value;
   const tags = document.getElementById("editor-tags").value.split(",").map(s => s.trim()).filter(Boolean);
   const image_url = document.getElementById("editor-image-url").value.trim();
+  const parent_recipe_id = document.getElementById("editor-parent-recipe-id") ? document.getElementById("editor-parent-recipe-id").value : null;
+  const fork_notes = document.getElementById("editor-fork-notes") ? document.getElementById("editor-fork-notes").value.trim() : "";
 
   const validIngredients = editorIngredients.filter(i => i.name.trim().length > 0);
   const validSteps = editorSteps.map((s, idx) => ({ step_number: idx + 1, instruction: s.instruction.trim() })).filter(s => s.instruction.length > 0);
@@ -541,7 +693,9 @@ async function handleRecipeEditorSubmit(e) {
   const payload = {
     title, description, prep_time_min, cook_time_min, servings,
     difficulty, cuisine, tags, ingredients: validIngredients, steps: validSteps,
-    image_url, is_public: 1
+    image_url, is_public: 1,
+    parent_recipe_id: parent_recipe_id ? parseInt(parent_recipe_id) : null,
+    fork_notes
   };
 
   try {

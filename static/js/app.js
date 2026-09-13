@@ -26,7 +26,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Route to initial view based on direct URL pathname or URL hash
   const pathname = window.location.pathname;
-  const hash = window.location.hash.replace("#", "");
+  const hash = window.location.hash.replace(/^#\/?/, "");
 
   if (pathname.startsWith("/recipes/") && pathname.split("/")[2]) {
     const id = pathname.split("/")[2];
@@ -37,6 +37,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else if (pathname.startsWith("/stations/") && pathname.split("/")[2]) {
     const slug = pathname.split("/")[2];
     navigateToStation(slug);
+  } else if ((pathname.startsWith("/tags/") || pathname.startsWith("/tag/")) && pathname.split("/")[2]) {
+    const tag = pathname.split("/")[2];
+    openHashtagFeed(tag);
   } else if (pathname.startsWith("/posts/") && pathname.split("/")[2]) {
     const postId = pathname.split("/")[2];
     navigateTo("feed");
@@ -50,6 +53,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else if (hash.startsWith("station/")) {
     const slug = hash.split("/")[1];
     navigateToStation(slug);
+  } else if (hash.startsWith("tag/")) {
+    const tag = hash.split("/")[1];
+    openHashtagFeed(tag);
   } else if (["stations", "recipes", "planner", "admin"].includes(hash)) {
     navigateTo(hash);
   } else {
