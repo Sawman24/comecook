@@ -30,12 +30,12 @@ function updateAuthUI() {
   if (currentUser) {
     container.innerHTML = `
       <div style="display: flex; align-items: center; gap: 0.75rem;">
-        <button class="btn btn-outline btn-sm desktop-only-btn" onclick="openCreateModal()">
+        <button class="btn btn-outline btn-sm" onclick="openCreateModal()">
           <span style="font-size: 1.1rem; line-height: 1;">+</span> Share
         </button>
         <div style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;" onclick="openUserProfile('${escapeHtml(currentUser.username)}')">
           <img src="${escapeHtml(currentUser.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" alt="${escapeHtml(currentUser.username)}" />
-          <div class="nav-user-text" style="display: flex; flex-direction: column; line-height: 1.1;">
+          <div style="display: flex; flex-direction: column; line-height: 1.1;">
             <span style="font-weight: 700; font-size: 0.85rem;">${escapeHtml(currentUser.display_name)}</span>
             <span style="font-size: 0.75rem; color: var(--text-light);">@${escapeHtml(currentUser.username)}${currentUser.is_admin ? ' <b style="color:var(--primary);">[Admin]</b>' : ''}</span>
           </div>
