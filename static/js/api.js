@@ -137,3 +137,57 @@ function downsampleImageFile(file, maxWidth = 1280, maxHeight = 1280) {
   });
 }
 
+/**
+ * Upload an image with automatic client-side optimization and raw file fallback.
+ */
+async function uploadImageFile(file) {
+  let uploadBlob = file;
+  try {
+    if (typeof downsampleImageFile === "function") {
+      uploadBlob = await downsampleImageFile(file, 1280, 1280);
+    }
+  } catch (downsampleErr) {
+    console.warn("Client downsample fallback to raw file:", downsampleErr);
+    uploadBlob = file;
+  }
+
+  const formData = new FormData();
+  formData.append("image", uploadBlob, file.name || "dish.jpg");
+
+  const res = await apiRequest("/api/upload", {
+    method: "POST",
+    body: formData
+  });
+
+  if (!res || !res.url) {
+    throw new Error(res?.message || "Upload failed");
+  }
+  return res.url;
+}
+
+/**
+ * Format timestamp into human-readable relative time (e.g., 'just now', '5m ago', '2h ago', '3d ago').
+ */
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return "";
+  try {
+    const date = new Date(timestamp.endsWith("Z") ? timestamp : timestamp.replace(" ", "T") + "Z");
+    const now = new Date();
+    const diffSeconds = Math.max(0, Math.floor((now - date) / 1000));
+
+    if (diffSeconds < 60) return "just now";
+    const minutes = Math.floor(diffSeconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days}d ago`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months}mo ago`;
+    return `${Math.floor(days / 365)}y ago`;
+  } catch (e) {
+    return timestamp;
+  }
+}
+
+

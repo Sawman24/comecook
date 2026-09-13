@@ -721,7 +721,7 @@ async function handleReviewPhotoSelect(input) {
     if (dropContent) {
       dropContent.innerHTML = `<div class="spinner-small"></div><p style="margin-top: 0.5rem; font-size: 0.85rem;">Uploading dish snap...</p>`;
     }
-    const uploadedUrl = await downsampleAndUploadImage(file);
+    const uploadedUrl = await uploadImageFile(file);
     document.getElementById("review-photo-url").value = uploadedUrl;
     if (previewImg) {
       previewImg.src = uploadedUrl;
