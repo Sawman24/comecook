@@ -365,6 +365,7 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_user_blocks ON user_blocks (user_id, blocked_user_id);
     CREATE INDEX IF NOT EXISTS idx_message_requests_recipient ON message_requests (recipient_id, status);
     CREATE INDEX IF NOT EXISTS idx_message_requests_sender ON message_requests (sender_id, status);
+    CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets (token, expires_at, used);
     """)
 
     # Dynamic migrations for existing databases

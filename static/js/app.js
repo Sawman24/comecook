@@ -11,6 +11,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Load Featured Chefs & Right Sidebar Content
   loadRightSidebarData();
 
+  // Handle Password Reset Deep Links (e.g. /#/reset-password?token=... or ?token=...)
+  const urlParams = new URLSearchParams(window.location.search);
+  let resetToken = urlParams.get("token") || urlParams.get("reset_token");
+  if (!resetToken && window.location.hash.includes("token=")) {
+    const hashPart = window.location.hash.includes("?") ? window.location.hash.split("?")[1] : window.location.hash;
+    const hashParams = new URLSearchParams(hashPart);
+    resetToken = hashParams.get("token") || hashParams.get("reset_token");
+  }
+
+  if (resetToken && typeof promptResetPassword === "function") {
+    setTimeout(() => promptResetPassword(resetToken), 200);
+  }
+
   // Route to initial view based on direct URL pathname or URL hash
   const pathname = window.location.pathname;
   const hash = window.location.hash.replace("#", "");

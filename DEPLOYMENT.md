@@ -78,6 +78,15 @@ PORT=5050
 DOMAIN=cooked.yourdomain.com
 SESSION_COOKIE_SECURE=1
 COOKED_SEED_DEMO=0
+
+# Transactional Email (Gmail, Brevo, SendGrid, Amazon SES, or custom SMTP)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=comecookapp@gmail.com
+SMTP_PASSWORD=your_16_char_google_app_password
+SMTP_USE_TLS=1
+EMAIL_FROM=Cooked <comecookapp@gmail.com>
+APP_URL=https://comecook.net
 ```
 
 ---
@@ -100,10 +109,17 @@ COOKED_SEED_DEMO=0
    | :--- | :--- | :--- |
    | `SECRET_KEY` | `(64-char random hex key)` | Session encryption key |
    | `HOST_PORT` | `8080` (or `3000`, `5055`) | **Change this to avoid port 5050 conflict on your host!** |
-   | `DOMAIN` | `comecook.app` | Your domain name |
+   | `DOMAIN` | `comecook.net` | Your domain name |
    | `COOKED_ENV` | `production` | Production mode |
    | `SESSION_COOKIE_SECURE` | `1` | Enforce HTTPS cookies |
    | `COOKED_SEED_DEMO` | `0` | 0 = clean database for real users |
+   | `SMTP_HOST` | `smtp.gmail.com` | SMTP host (e.g. Gmail, Brevo, SendGrid) |
+   | `SMTP_PORT` | `587` | SMTP port (`587` for TLS, `465` for SSL) |
+   | `SMTP_USER` | `comecookapp@gmail.com` | SMTP username / email address |
+   | `SMTP_PASSWORD` | `your_app_password` | Gmail 16-char App Password or SMTP key |
+   | `SMTP_USE_TLS` | `1` | `1` for TLS |
+   | `EMAIL_FROM` | `Cooked <comecookapp@gmail.com>` | Sender display name & email |
+   | `APP_URL` | `https://comecook.net` | Absolute base URL for reset links |
 6. Click **Deploy the stack**!
 
 ---

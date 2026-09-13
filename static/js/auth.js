@@ -148,14 +148,19 @@ function openAuthModal(mode = "login") {
   } else {
     titleEl.textContent = "Reset Your Password";
     bodyEl.innerHTML = `
-      <div style="text-align: center; padding: 1.25rem 0.5rem;">
-        <div style="font-size: 2.25rem; margin-bottom: 0.75rem;">🔒</div>
-        <h4 style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 700; color: var(--text-color);">Password Reset Paused</h4>
-        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
-          Self-service password reset is temporarily disabled while automated email verification is being configured. If you need assistance accessing your account, please reach out to the site administrator.
+      <form onsubmit="handleForgotSubmit(event)">
+        <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.25rem;">
+          Enter your registered email address. We'll send you a secure link to reset your password.
         </p>
-        <button type="button" class="btn btn-primary" style="width: 100%;" onclick="openAuthModal('login')">Back to Login</button>
-      </div>
+        <div class="form-group">
+          <label>Email Address</label>
+          <input type="email" id="forgot-email" class="form-control" required placeholder="chef@example.com" autocomplete="email" />
+        </div>
+        <button type="submit" id="forgot-submit-btn" class="btn btn-primary" style="width: 100%;">Send Reset Link</button>
+        <p style="text-align: center; margin-top: 1.25rem; font-size: 0.85rem;">
+          <a href="javascript:void(0)" onclick="openAuthModal('login')">Back to Login</a>
+        </p>
+      </form>
     `;
   }
 
@@ -279,29 +284,118 @@ async function handleRegisterSubmit(e) {
 
 async function handleForgotSubmit(e) {
   e.preventDefault();
+  const input = document.getElementById("forgot-email");
+  const btn = document.getElementById("forgot-submit-btn");
+  const email = (input ? input.value : "").trim();
+  if (!email) return;
+
   try {
-    const email = (document.getElementById("forgot-email")?.value || "").trim();
+    if (btn) { btn.disabled = true; btn.textContent = "Sending link..."; }
     const data = await apiRequest("/api/auth/forgot-password", {
       method: "POST",
       body: JSON.stringify({ email })
     });
-    showToast(data.message || "Password reset is temporarily disabled.", "info");
-    openAuthModal("login");
+
+    const bodyEl = document.getElementById("auth-modal-form");
+    if (bodyEl) {
+      bodyEl.innerHTML = `
+        <div style="text-align: center; padding: 1.25rem 0.5rem;">
+          <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">✉️</div>
+          <h4 style="margin-bottom: 0.5rem; font-size: 1.1rem; font-weight: 700; color: var(--text-color);">Check Your Inbox</h4>
+          <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+            ${escapeHtml(data.message || "If an account exists with that email, a password reset link has been sent.")}
+          </p>
+          <button type="button" class="btn btn-secondary" style="width: 100%;" onclick="openAuthModal('login')">Return to Login</button>
+        </div>
+      `;
+    }
   } catch (err) {
-    showToast(err.message || "Password reset is temporarily disabled.", "error");
-    openAuthModal("login");
+    if (btn) { btn.disabled = false; btn.textContent = "Send Reset Link"; }
+    showToast(err.message || "Failed to send reset link.", "error");
   }
 }
 
-function promptResetPassword(token) {
-  showToast("Password reset is temporarily disabled.", "info");
-  openAuthModal("login");
+async function promptResetPassword(token) {
+  const modal = document.getElementById("auth-modal");
+  const titleEl = document.getElementById("auth-modal-title");
+  const bodyEl = document.getElementById("auth-modal-form");
+  if (!modal || !titleEl || !bodyEl) return;
+
+  titleEl.textContent = "Set New Password";
+  bodyEl.innerHTML = `<div style="text-align: center; padding: 2rem; color: var(--text-muted);">Verifying reset link...</div>`;
+  modal.classList.add("show");
+
+  try {
+    const data = await apiRequest("/api/auth/verify-reset-token", {
+      method: "POST",
+      body: JSON.stringify({ token })
+    });
+
+    bodyEl.innerHTML = `
+      <form onsubmit="handleResetPasswordSubmit(event, '${token}')">
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+          Resetting password for <strong>@${escapeHtml(data.username || "Chef")}</strong>. Enter a new secure password below:
+        </p>
+        <div class="form-group">
+          <label>New Password</label>
+          <input type="password" id="reset-new-password" class="form-control" required minlength="8" placeholder="Enter new strong password" autocomplete="new-password" oninput="evaluatePasswordStrength(this.value, 'reset-pw-feedback')" />
+          <div id="reset-pw-feedback" class="password-feedback-container">
+            <div class="password-strength-wrap">
+              <div class="password-strength-bar"><div class="password-strength-fill" id="reset-pw-fill"></div></div>
+              <span class="password-strength-text" id="reset-pw-text">Password strength</span>
+            </div>
+            <div class="password-reqs-grid">
+              <span class="password-req-item" id="reset-req-len">○ 8+ Characters</span>
+              <span class="password-req-item" id="reset-req-upper">○ Uppercase (A-Z)</span>
+              <span class="password-req-item" id="reset-req-lower">○ Lowercase (a-z)</span>
+              <span class="password-req-item" id="reset-req-num">○ Number (0-9)</span>
+              <span class="password-req-item" id="reset-req-sym">○ Special Symbol (!@#$)</span>
+            </div>
+          </div>
+        </div>
+        <button type="submit" id="reset-pw-submit-btn" class="btn btn-primary" style="width: 100%;">Update Password</button>
+      </form>
+    `;
+  } catch (err) {
+    bodyEl.innerHTML = `
+      <div style="text-align: center; padding: 1.25rem 0.5rem;">
+        <div style="font-size: 2.25rem; margin-bottom: 0.75rem;">⚠️</div>
+        <h4 style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 700; color: var(--danger);">Link Expired or Invalid</h4>
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+          ${escapeHtml(err.message || "This password reset link is invalid or has expired.")}
+        </p>
+        <button type="button" class="btn btn-primary" style="width: 100%;" onclick="openAuthModal('forgot')">Request New Link</button>
+      </div>
+    `;
+  }
 }
 
 async function handleResetPasswordSubmit(e, token) {
   e.preventDefault();
-  showToast("Password reset is temporarily disabled.", "error");
-  openAuthModal("login");
+  const new_password = document.getElementById("reset-new-password")?.value || "";
+  const btn = document.getElementById("reset-pw-submit-btn");
+
+  const isStrong = evaluatePasswordStrength(new_password, "reset-pw-feedback");
+  if (!isStrong) {
+    showToast("Password must meet all 5 security requirements.", "error");
+    return;
+  }
+
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = "Updating..."; }
+    const data = await apiRequest("/api/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ token, new_password })
+    });
+    showToast(data.message || "Password updated successfully!", "success");
+    if (window.location.hash.includes("reset-password") || window.location.search.includes("token")) {
+      history.replaceState(null, "", window.location.pathname);
+    }
+    openAuthModal("login");
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "Update Password"; }
+    showToast(err.message || "Failed to reset password.", "error");
+  }
 }
 
 async function handleLogout() {

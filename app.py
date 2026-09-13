@@ -19,6 +19,9 @@ from auth import (
 )
 from moderation_filter import contains_profanity, validate_clean_content
 from scraper import scrape_recipe_from_url
+from email_service import (
+    send_password_reset_email, send_welcome_email, send_password_changed_email, get_smtp_config
+)
 
 # Setup App
 app = Flask(__name__, static_folder="static", static_url_path="")
@@ -42,6 +45,23 @@ def is_request_secure() -> bool:
         request.headers.get("X-Forwarded-Proto", "").lower() == "https" or
         os.environ.get("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
     )
+
+
+def get_request_base_url() -> str:
+    """Determine absolute base URL of the site."""
+    cfg = get_smtp_config()
+    if cfg["base_url"] and cfg["base_url"] != "https://comecook.net":
+        return cfg["base_url"]
+
+    if request:
+        try:
+            proto = "https" if is_request_secure() else "http"
+            host = request.host
+            if host:
+                return f"{proto}://{host}"
+        except Exception:
+            pass
+    return cfg["base_url"]
 
 
 @app.after_request
@@ -623,6 +643,13 @@ def register():
     conn.commit()
     conn.close()
 
+    # Dispatch welcome email asynchronously
+    try:
+        base_url = get_request_base_url()
+        send_welcome_email(email, username, display_name, base_url=base_url)
+    except Exception as e:
+        app.logger.warning(f"Failed to dispatch welcome email: {e}")
+
     # Create session token and set HttpOnly cookie
     token = create_user_session(user_id)
     response = make_response(jsonify({
@@ -732,17 +759,130 @@ def get_me():
 
 @app.route("/api/auth/forgot-password", methods=["POST"])
 def forgot_password():
+    data = request.get_json() or {}
+    email = (data.get("email") or "").strip().lower()
+
+    if not email or "@" not in email:
+        return jsonify({"error": "Validation Error", "message": "A valid email address is required."}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, email FROM users WHERE email = ? AND is_active = 1;", (email,))
+    user = cursor.fetchone()
+
+    if user:
+        # Generate 256-bit cryptographically secure token
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Invalidate old unused tokens for this user
+        cursor.execute("UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0;", (user["id"],))
+
+        cursor.execute("""
+            INSERT INTO password_resets (user_id, token, expires_at, used)
+            VALUES (?, ?, ?, 0);
+        """, (user["id"], token, expires_at))
+        conn.commit()
+
+        # Dispatch reset email asynchronously
+        try:
+            base_url = get_request_base_url()
+            send_password_reset_email(user["email"], user["username"], token, base_url=base_url)
+        except Exception as e:
+            app.logger.warning(f"Error dispatching reset email: {e}")
+
+    conn.close()
+
+    # Anti-enumeration response: always return generic success message
     return jsonify({
-        "error": "Feature Disabled",
-        "message": "Password reset is temporarily disabled while automated email delivery is being configured. Please contact the site administrator for account assistance."
-    }), 400
+        "success": True,
+        "message": "If an account exists with that email address, a password reset link has been sent. Please check your inbox and spam folder."
+    }), 200
+
+@app.route("/api/auth/verify-reset-token", methods=["POST"])
+def verify_reset_token():
+    data = request.get_json() or {}
+    token = (data.get("token") or "").strip()
+
+    if not token:
+        return jsonify({"valid": False, "message": "Token is required."}), 400
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pr.id, pr.user_id, u.username
+        FROM password_resets pr
+        JOIN users u ON pr.user_id = u.id
+        WHERE pr.token = ? AND pr.expires_at > ? AND pr.used = 0 AND u.is_active = 1;
+    """, (token, now_str))
+    entry = cursor.fetchone()
+    conn.close()
+
+    if not entry:
+        return jsonify({"valid": False, "message": "Password reset link is invalid or has expired."}), 400
+
+    return jsonify({
+        "valid": True,
+        "username": entry["username"],
+        "message": "Token is valid."
+    }), 200
 
 @app.route("/api/auth/reset-password", methods=["POST"])
 def reset_password():
+    data = request.get_json() or {}
+    token = (data.get("token") or "").strip()
+    new_password = data.get("new_password") or ""
+
+    if not token:
+        return jsonify({"error": "Validation Error", "message": "Reset token is required."}), 400
+
+    is_valid_pw, pw_err = validate_password_strength(new_password)
+    if not is_valid_pw:
+        return jsonify({"error": "Validation Error", "message": pw_err}), 400
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT pr.id, pr.user_id, u.username, u.email
+        FROM password_resets pr
+        JOIN users u ON pr.user_id = u.id
+        WHERE pr.token = ? AND pr.expires_at > ? AND pr.used = 0 AND u.is_active = 1;
+    """, (token, now_str))
+    reset_entry = cursor.fetchone()
+
+    if not reset_entry:
+        conn.close()
+        return jsonify({"error": "Invalid Token", "message": "Password reset link is invalid or has expired. Please request a new one."}), 400
+
+    user_id = reset_entry["user_id"]
+    pw_hash = hash_password(new_password)
+
+    # 1. Update password hash
+    cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?;", (pw_hash, user_id))
+
+    # 2. Mark token as used
+    cursor.execute("UPDATE password_resets SET used = 1 WHERE id = ?;", (reset_entry["id"],))
+
+    # 3. Security: Invalidate all existing active sessions
+    cursor.execute("DELETE FROM sessions WHERE user_id = ?;", (user_id,))
+    conn.commit()
+
+    # 4. Dispatch security alert email
+    try:
+        base_url = get_request_base_url()
+        send_password_changed_email(reset_entry["email"], reset_entry["username"], base_url=base_url)
+    except Exception as e:
+        app.logger.warning(f"Failed to dispatch password changed alert: {e}")
+
+    conn.close()
+
     return jsonify({
-        "error": "Feature Disabled",
-        "message": "Password reset is temporarily disabled while automated email delivery is being configured. Please contact the site administrator for account assistance."
-    }), 400
+        "success": True,
+        "message": "Password reset successfully! You can now log in with your new password."
+    }), 200
 
 
 # ==============================================================================

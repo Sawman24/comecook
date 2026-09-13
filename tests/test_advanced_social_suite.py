@@ -336,18 +336,19 @@ class TestAdvancedSocialSuite(unittest.TestCase):
         self.assertEqual(dm_ok.status_code, 201)
 
     # --------------------------------------------------------------------------
-    # 8. PASSWORD RESET DISABLED CHECK
+    # 8. PASSWORD RESET SECURITY CHECK
     # --------------------------------------------------------------------------
-    def test_08_password_reset_is_safely_disabled(self):
+    def test_08_password_reset_security_flow(self):
         client = app.test_client()
         forgot_res = client.post("/api/auth/forgot-password", json={"email": "whisperer1@example.com"})
-        self.assertEqual(forgot_res.status_code, 400)
-        self.assertIn("disabled", forgot_res.get_json()["message"].lower())
+        self.assertEqual(forgot_res.status_code, 200)
+        self.assertNotIn("token", forgot_res.get_json())
         self.assertNotIn("dev_reset_token", forgot_res.get_json())
 
-        reset_res = client.post("/api/auth/reset-password", json={"token": "sometoken", "new_password": "NewPassword123!"})
-        self.assertEqual(reset_res.status_code, 400)
-        self.assertIn("disabled", reset_res.get_json()["message"].lower())
+        # Invalid token rejection
+        reset_res = client.post("/api/auth/reset-password", json={"token": "invalid-token-12345", "new_password": "NewPassword123!"})
+        self.assertIn("invalid", reset_res.get_json()["message"].lower())
+        self.assertIn("expired", reset_res.get_json()["message"].lower())
 
 if __name__ == "__main__":
     unittest.main()
