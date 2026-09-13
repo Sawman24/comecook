@@ -2,6 +2,8 @@ import os
 import secrets
 import json
 import re
+import time
+import threading
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify, g, send_from_directory, make_response
 from PIL import Image
@@ -267,8 +269,19 @@ def parse_and_notify_mentions(text: str, actor_id: int, entity_type: str, entity
             conn.close()
 
 
+# Thread-safe in-memory cache for user culinary badges (60s TTL)
+_BADGE_CACHE = {}  # user_id -> (badges_list, expire_timestamp)
+_BADGE_CACHE_LOCK = threading.Lock()
+_BADGE_CACHE_TTL = 60.0
+
 def compute_user_badges(user_id: int, conn=None) -> list:
-    """Compute and return dynamic culinary achievement badges for a user."""
+    """Compute and return dynamic culinary achievement badges for a user with memory caching."""
+    now = time.time()
+    with _BADGE_CACHE_LOCK:
+        cached = _BADGE_CACHE.get(user_id)
+        if cached and cached[1] > now:
+            return list(cached[0])
+
     badges = []
     close_conn = False
     try:
@@ -404,7 +417,136 @@ def compute_user_badges(user_id: int, conn=None) -> list:
         app.logger.warning(f"Error computing user badges: {e}")
         if close_conn:
             conn.close()
+
+    with _BADGE_CACHE_LOCK:
+        _BADGE_CACHE[user_id] = (badges, now + _BADGE_CACHE_TTL)
     return badges
+
+
+def enrich_posts_batch(posts: list, current_user: dict, conn) -> list:
+    """Enrich a list of posts with badges, reactions, user reactions/likes, and polls using fast batch queries."""
+    if not posts:
+        return posts
+
+    cursor = conn.cursor()
+    post_ids = [p["id"] for p in posts]
+    placeholders = ",".join(["?"] * len(post_ids))
+
+    # 1. Author badges (cached in memory)
+    for p in posts:
+        p["author_badges"] = compute_user_badges(p["user_id"], conn=conn)
+
+    # 2. Batch reactions summary
+    cursor.execute(f"""
+        SELECT post_id, reaction, COUNT(*) AS count
+        FROM post_reactions
+        WHERE post_id IN ({placeholders})
+        GROUP BY post_id, reaction;
+    """, post_ids)
+
+    reactions_by_post = {pid: {"heart": 0, "chef_kiss": 0, "fire": 0, "drool": 0, "genius": 0} for pid in post_ids}
+    total_rx_by_post = {pid: 0 for pid in post_ids}
+    for rx in cursor.fetchall():
+        pid = rx["post_id"]
+        rname = rx["reaction"]
+        if pid in reactions_by_post and rname in reactions_by_post[pid]:
+            reactions_by_post[pid][rname] = rx["count"]
+            total_rx_by_post[pid] += rx["count"]
+
+    # 3. Batch user reactions & likes
+    user_reactions_by_post = {}
+    user_likes_by_post = set()
+    if current_user:
+        cursor.execute(f"""
+            SELECT post_id, reaction
+            FROM post_reactions
+            WHERE post_id IN ({placeholders}) AND user_id = ?;
+        """, post_ids + [current_user["id"]])
+        for row in cursor.fetchall():
+            user_reactions_by_post[row["post_id"]] = row["reaction"]
+
+        cursor.execute(f"""
+            SELECT post_id
+            FROM post_likes
+            WHERE post_id IN ({placeholders}) AND user_id = ?;
+        """, post_ids + [current_user["id"]])
+        for row in cursor.fetchall():
+            user_likes_by_post.add(row["post_id"])
+
+    # 4. Batch Polls
+    cursor.execute(f"""
+        SELECT id, post_id, question, options_json
+        FROM post_polls
+        WHERE post_id IN ({placeholders});
+    """, post_ids)
+    poll_rows = cursor.fetchall()
+    polls_by_post = {}
+    if poll_rows:
+        poll_ids = [pr["id"] for pr in poll_rows]
+        poll_placeholders = ",".join(["?"] * len(poll_ids))
+
+        cursor.execute(f"""
+            SELECT poll_id, option_index, COUNT(*) AS count
+            FROM poll_votes
+            WHERE poll_id IN ({poll_placeholders})
+            GROUP BY poll_id, option_index;
+        """, poll_ids)
+        votes_by_poll = {}
+        for vr in cursor.fetchall():
+            p_id = vr["poll_id"]
+            if p_id not in votes_by_poll:
+                votes_by_poll[p_id] = {}
+            votes_by_poll[p_id][vr["option_index"]] = vr["count"]
+
+        user_votes_by_poll = {}
+        if current_user:
+            cursor.execute(f"""
+                SELECT poll_id, option_index
+                FROM poll_votes
+                WHERE poll_id IN ({poll_placeholders}) AND user_id = ?;
+            """, poll_ids + [current_user["id"]])
+            for uv in cursor.fetchall():
+                user_votes_by_poll[uv["poll_id"]] = uv["option_index"]
+
+        for pr in poll_rows:
+            try:
+                options_list = json.loads(pr["options_json"] or "[]")
+            except Exception:
+                options_list = []
+
+            p_votes = votes_by_poll.get(pr["id"], {})
+            total_votes = sum(p_votes.values())
+            options_data = []
+            for idx, opt_text in enumerate(options_list):
+                votes = p_votes.get(idx, 0)
+                pct = round((votes / total_votes * 100)) if total_votes > 0 else 0
+                options_data.append({
+                    "index": idx,
+                    "text": opt_text,
+                    "votes": votes,
+                    "percent": pct
+                })
+
+            polls_by_post[pr["post_id"]] = {
+                "id": pr["id"],
+                "question": pr["question"],
+                "options": options_data,
+                "total_votes": total_votes,
+                "user_voted_index": user_votes_by_poll.get(pr["id"])
+            }
+
+    # Attach enriched fields
+    for p in posts:
+        pid = p["id"]
+        p["reactions"] = {
+            "counts": reactions_by_post.get(pid, {"heart": 0, "chef_kiss": 0, "fire": 0, "drool": 0, "genius": 0}),
+            "total": total_rx_by_post.get(pid, 0),
+            "user_reaction": user_reactions_by_post.get(pid)
+        }
+        p["is_liked"] = (pid in user_likes_by_post)
+        p["poll"] = polls_by_post.get(pid)
+
+    return posts
 
 
 # ==============================================================================
@@ -1276,10 +1418,16 @@ def global_search():
     """, (user_search_param, user_search_param, user_search_param))
     chefs = [dict(row) for row in cursor.fetchall()]
 
-    if current_user:
+    if current_user and chefs:
+        chef_ids = [c["id"] for c in chefs]
+        c_placeholders = ",".join(["?"] * len(chef_ids))
+        cursor.execute(f"SELECT friend_id FROM friendships WHERE user_id = ? AND friend_id IN ({c_placeholders});", [current_user["id"]] + chef_ids)
+        following_ids = {row["friend_id"] for row in cursor.fetchall()}
         for chef in chefs:
-            cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], chef["id"]))
-            chef["is_following"] = bool(cursor.fetchone())
+            chef["is_following"] = (chef["id"] in following_ids)
+    else:
+        for chef in chefs:
+            chef["is_following"] = False
 
     # 3. Search Stations
     cursor.execute("""
@@ -1397,6 +1545,12 @@ def get_recipes():
     """
     cursor.execute(sql, params)
     recipes = [dict(row) for row in cursor.fetchall()]
+    saved_ids = set()
+    if current_user and recipes:
+        r_ids = [r["id"] for r in recipes]
+        r_placeholders = ",".join(["?"] * len(r_ids))
+        cursor.execute(f"SELECT recipe_id FROM saved_recipes WHERE user_id = ? AND recipe_id IN ({r_placeholders});", [current_user["id"]] + r_ids)
+        saved_ids = {row["recipe_id"] for row in cursor.fetchall()}
 
     # Parse tags & check bookmark state
     for r in recipes:
@@ -1404,11 +1558,7 @@ def get_recipes():
             r["tags"] = json.loads(r["tags_json"])
         except Exception:
             r["tags"] = []
-        if current_user:
-            cursor.execute("SELECT id FROM saved_recipes WHERE user_id = ? AND recipe_id = ?;", (current_user["id"], r["id"]))
-            r["is_saved"] = bool(cursor.fetchone())
-        else:
-            r["is_saved"] = False
+        r["is_saved"] = (r["id"] in saved_ids)
 
     conn.close()
     return jsonify({"recipes": recipes})
@@ -2310,91 +2460,7 @@ def get_posts():
     """
     cursor.execute(sql, params)
     posts = [dict(row) for row in cursor.fetchall()]
-
-    for p in posts:
-        # 1. Author Badges
-        p["author_badges"] = compute_user_badges(p["user_id"], conn=conn)
-
-        # 2. Reactions Summary
-        cursor.execute("""
-            SELECT reaction, COUNT(*) AS count
-            FROM post_reactions
-            WHERE post_id = ?
-            GROUP BY reaction;
-        """, (p["id"],))
-        reaction_rows = cursor.fetchall()
-        rx_map = {"heart": 0, "chef_kiss": 0, "fire": 0, "drool": 0, "genius": 0}
-        total_rx = 0
-        for rx in reaction_rows:
-            if rx["reaction"] in rx_map:
-                rx_map[rx["reaction"]] = rx["count"]
-                total_rx += rx["count"]
-
-        user_reaction = None
-        if current_user:
-            cursor.execute("SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
-            ur_row = cursor.fetchone()
-            if ur_row:
-                user_reaction = ur_row["reaction"]
-
-            cursor.execute("SELECT id FROM post_likes WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
-            p["is_liked"] = bool(cursor.fetchone())
-        else:
-            p["is_liked"] = False
-
-        p["reactions"] = {
-            "counts": rx_map,
-            "total": total_rx,
-            "user_reaction": user_reaction
-        }
-
-        # 3. Attached Poll
-        cursor.execute("SELECT id, question, options_json FROM post_polls WHERE post_id = ?;", (p["id"],))
-        poll_row = cursor.fetchone()
-        if poll_row:
-            try:
-                options_list = json.loads(poll_row["options_json"] or "[]")
-            except Exception:
-                options_list = []
-
-            # Aggregate votes
-            cursor.execute("""
-                SELECT option_index, COUNT(*) AS count
-                FROM poll_votes
-                WHERE poll_id = ?
-                GROUP BY option_index;
-            """, (poll_row["id"],))
-            vote_rows = {r["option_index"]: r["count"] for r in cursor.fetchall()}
-            total_votes = sum(vote_rows.values())
-
-            options_data = []
-            for idx, opt_text in enumerate(options_list):
-                votes = vote_rows.get(idx, 0)
-                pct = round((votes / total_votes * 100)) if total_votes > 0 else 0
-                options_data.append({
-                    "index": idx,
-                    "text": opt_text,
-                    "votes": votes,
-                    "percent": pct
-                })
-
-            user_voted_index = None
-            if current_user:
-                cursor.execute("SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?;", (poll_row["id"], current_user["id"]))
-                v_row = cursor.fetchone()
-                if v_row:
-                    user_voted_index = v_row["option_index"]
-
-            p["poll"] = {
-                "id": poll_row["id"],
-                "question": poll_row["question"],
-                "options": options_data,
-                "total_votes": total_votes,
-                "user_voted_index": user_voted_index
-            }
-        else:
-            p["poll"] = None
-
+    posts = enrich_posts_batch(posts, current_user, conn)
     conn.close()
     return jsonify({"posts": posts})
 
@@ -2566,72 +2632,11 @@ def get_hashtag_feed(tag_name):
     """, (tag_info["id"],))
     posts = [dict(p) for p in cursor.fetchall()]
     current_user = get_authenticated_user()
-    for p in posts:
-        p["author_badges"] = compute_user_badges(p["user_id"], conn=conn)
-
-        # Reactions
-        cursor.execute("""
-            SELECT reaction, COUNT(*) AS count
-            FROM post_reactions
-            WHERE post_id = ?
-            GROUP BY reaction;
-        """, (p["id"],))
-        rx_rows = cursor.fetchall()
-        rx_map = {r["reaction"]: r["count"] for r in rx_rows}
-        total_rx = sum(rx_map.values())
-        user_reaction = None
-        if current_user:
-            cursor.execute("SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
-            ur_row = cursor.fetchone()
-            if ur_row:
-                user_reaction = ur_row["reaction"]
-            cursor.execute("SELECT id FROM post_likes WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
-            p["is_liked"] = bool(cursor.fetchone())
-        else:
-            p["is_liked"] = False
-
-        p["reactions"] = {
-            "counts": rx_map,
-            "total": total_rx,
-            "user_reaction": user_reaction
-        }
-
-        # Attached Poll
-        cursor.execute("SELECT id, question, options_json FROM post_polls WHERE post_id = ?;", (p["id"],))
-        poll_row = cursor.fetchone()
-        if poll_row:
-            try:
-                options_list = json.loads(poll_row["options_json"] or "[]")
-            except Exception:
-                options_list = []
-            cursor.execute("SELECT option_index, COUNT(*) AS count FROM poll_votes WHERE poll_id = ? GROUP BY option_index;", (poll_row["id"],))
-            vote_rows = {r["option_index"]: r["count"] for r in cursor.fetchall()}
-            total_votes = sum(vote_rows.values())
-            options_data = []
-            for idx, opt_text in enumerate(options_list):
-                votes = vote_rows.get(idx, 0)
-                pct = round((votes / total_votes * 100)) if total_votes > 0 else 0
-                options_data.append({"index": idx, "text": opt_text, "votes": votes, "percent": pct})
-            user_voted_index = None
-            if current_user:
-                cursor.execute("SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?;", (poll_row["id"], current_user["id"]))
-                v_row = cursor.fetchone()
-                if v_row:
-                    user_voted_index = v_row["option_index"]
-            p["poll"] = {
-                "id": poll_row["id"],
-                "question": poll_row["question"],
-                "options": options_data,
-                "total_votes": total_votes,
-                "user_voted_index": user_voted_index
-            }
-        else:
-            p["poll"] = None
-
+    posts = enrich_posts_batch(posts, current_user, conn)
     conn.close()
     return jsonify({
         "success": True,
-        "tag": cleaned_tag,
+        "tag": tag_info["tag"],
         "usage_count": tag_info["usage_count"],
         "recipes": recipes,
         "posts": posts
