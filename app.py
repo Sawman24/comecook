@@ -3677,28 +3677,25 @@ def admin_purge_stress_data():
     if ids:
         placeholders = ",".join(["?"] * len(ids))
         cursor.execute(f"DELETE FROM users WHERE id IN ({placeholders});", ids)
-        cursor.execute("DELETE FROM login_attempts WHERE username LIKE 'stress_%' OR username LIKE 'chef_%';")
-        cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'post' AND entity_id NOT IN (SELECT id FROM community_posts);")
-        cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'recipe' AND entity_id NOT IN (SELECT id FROM recipes);")
-        cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'review' AND entity_id NOT IN (SELECT id FROM recipe_reviews);")
-        cursor.execute("UPDATE hashtags SET usage_count = (SELECT COUNT(*) FROM hashtag_references hr WHERE hr.hashtag_id = hashtags.id);")
-        cursor.execute("DELETE FROM hashtags WHERE usage_count = 0;")
-        cursor.execute("UPDATE recipes SET fork_count = (SELECT COUNT(*) FROM recipes r2 WHERE r2.parent_recipe_id = recipes.id);")
-        conn.commit()
-        cursor.execute("VACUUM;")
-        conn.close()
-        return jsonify({
-            "success": True,
-            "message": f"Successfully purged {len(ids)} stress test accounts and all associated data!",
-            "purged_count": len(ids)
-        })
-    else:
-        conn.close()
-        return jsonify({
-            "success": True,
-            "message": "No stress test accounts found to purge.",
-            "purged_count": 0
-        })
+    
+    # Always clean orphaned test artifacts and resync counts
+    cursor.execute("DELETE FROM login_attempts WHERE username LIKE 'stress_%' OR username LIKE 'chef_%';")
+    cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'post' AND entity_id NOT IN (SELECT id FROM community_posts);")
+    cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'recipe' AND entity_id NOT IN (SELECT id FROM recipes);")
+    cursor.execute("DELETE FROM hashtag_references WHERE entity_type = 'review' AND entity_id NOT IN (SELECT id FROM recipe_reviews);")
+    cursor.execute("UPDATE hashtags SET usage_count = (SELECT COUNT(*) FROM hashtag_references hr WHERE hr.hashtag_id = hashtags.id);")
+    cursor.execute("DELETE FROM hashtags WHERE usage_count <= 0 OR id NOT IN (SELECT DISTINCT hashtag_id FROM hashtag_references);")
+    cursor.execute("UPDATE recipes SET fork_count = (SELECT COUNT(*) FROM recipes r2 WHERE r2.parent_recipe_id = recipes.id);")
+    conn.commit()
+    cursor.execute("VACUUM;")
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "message": f"Successfully cleaned all stress test accounts, synced hashtag counts, and purged unused hashtags! (Purged {len(ids)} users)",
+        "purged_count": len(ids)
+    })
+
 
 # ==============================================================================
 # MEAL PLANNER
