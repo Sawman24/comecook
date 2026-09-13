@@ -33,9 +33,12 @@ async function loadAdminDashboardView() {
             Platform health, live metrics, user administration, and community moderation
           </p>
         </div>
-        <div style="display: flex; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button class="btn btn-outline btn-sm" style="color: #ea580c; border-color: #ea580c;" onclick="purgeStressTestData()">
+            🧹 Purge Stress Test Data
+          </button>
           <button class="btn btn-outline btn-sm" style="color: var(--danger); border-color: var(--danger);" onclick="purgeOffensiveAccounts()">
-            🧹 Purge Offensive Accounts
+            🛡️ Purge Offensive Accounts
           </button>
           <button class="btn btn-secondary btn-sm" onclick="loadAdminDashboardView()">
             🔄 Refresh Queue
@@ -324,5 +327,20 @@ async function purgeOffensiveAccounts() {
     showToast("Error during purge: " + err.message, "error");
   }
 }
+
+async function purgeStressTestData() {
+  if (!confirm("Are you sure you want to permanently purge all virtual stress test accounts, fake recipes, twists, comments, and metrics?")) {
+    return;
+  }
+
+  try {
+    const res = await apiRequest("/api/admin/purge-stress-data", { method: "POST" });
+    showToast(res.message || "Stress test data purged successfully!", "success");
+    loadAdminDashboardView();
+  } catch (err) {
+    showToast("Error during purge: " + err.message, "error");
+  }
+}
+
 
 

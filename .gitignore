@@ -43,6 +43,7 @@ stress_test*.py
 load_test*.py
 cleanup_stress*.py
 clean_*.py
+clean.py
 stress_results/
 
 # Agent App Data
