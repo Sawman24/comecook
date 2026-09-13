@@ -218,6 +218,9 @@ async function handleLoginSubmit(e) {
       method: "POST",
       body: JSON.stringify({ username, password })
     });
+    if (data.token) {
+      localStorage.setItem("cooked_auth_token", data.token);
+    }
     currentUser = data.user;
     updateAuthUI();
     closeAuthModal();
@@ -249,6 +252,9 @@ async function handleRegisterSubmit(e) {
       method: "POST",
       body: JSON.stringify({ username, display_name, email, password, bio })
     });
+    if (data.token) {
+      localStorage.setItem("cooked_auth_token", data.token);
+    }
     currentUser = data.user;
     updateAuthUI();
     closeAuthModal();
@@ -258,6 +264,7 @@ async function handleRegisterSubmit(e) {
     showToast(err.message, "error");
   }
 }
+
 
 async function handleForgotSubmit(e) {
   e.preventDefault();
@@ -329,11 +336,16 @@ async function handleResetPasswordSubmit(e, token) {
 async function handleLogout() {
   try {
     await apiRequest("/api/auth/logout", { method: "POST" });
+    localStorage.removeItem("cooked_auth_token");
     currentUser = null;
     updateAuthUI();
     showToast("You have been logged out.", "info");
     if (typeof refreshCurrentView === "function") refreshCurrentView();
   } catch (err) {
+    localStorage.removeItem("cooked_auth_token");
+    currentUser = null;
+    updateAuthUI();
     showToast("Logout error: " + err.message, "error");
   }
 }
+

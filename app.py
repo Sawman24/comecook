@@ -34,13 +34,13 @@ init_db()
 seed_data_if_empty()
 
 def is_request_secure() -> bool:
-    """Check if the current request is HTTPS or running in production environment."""
+    """Check if the current request is HTTPS or running over a secure transport."""
     return (
         request.is_secure or
         request.headers.get("X-Forwarded-Proto", "").lower() == "https" or
-        os.environ.get("COOKED_ENV", "").lower() == "production" or
         os.environ.get("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
     )
+
 
 @app.after_request
 def apply_security_headers(response):

@@ -52,6 +52,12 @@ async function apiRequest(endpoint, options = {}) {
     "Accept": "application/json"
   };
 
+  // Attach Bearer token from localStorage for seamless cross-protocol / reverse proxy support
+  const storedToken = localStorage.getItem("cooked_auth_token");
+  if (storedToken) {
+    defaultHeaders["Authorization"] = `Bearer ${storedToken}`;
+  }
+
   // If body is FormData (for uploads), delete Content-Type so browser sets boundary
   if (options.body instanceof FormData) {
     delete defaultHeaders["Content-Type"];
@@ -65,6 +71,7 @@ async function apiRequest(endpoint, options = {}) {
       ...(options.headers || {})
     }
   };
+
 
   try {
     const response = await fetch(endpoint, config);
