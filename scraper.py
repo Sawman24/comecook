@@ -1,20 +1,31 @@
 import json
 import re
+import subprocess
 import requests
 from bs4 import BeautifulSoup
 from recipe_scrapers import scrape_html, WebsiteNotImplementedError, NoSchemaFoundInWildMode
 
 BROWSER_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
+        "Chrome/128.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
     "DNT": "1",
-    "Upgrade-Insecure-Requests": "1"
+    "Cache-Control": "max-age=0",
 }
+
 
 def parse_ingredient_line(line: str) -> dict:
     """Parse raw ingredient line into structured amount, unit, and name."""
@@ -307,6 +318,103 @@ def parse_raw_recipe_text(text: str) -> dict:
         "source_url": ""
     }
 
+def is_bot_blocked_html(html: str) -> bool:
+    """Detect if HTML response is an anti-bot challenge or block page rather than real recipe content."""
+    if not html or len(html) < 200:
+        return True
+    lower = html.lower()
+    block_signals = [
+        "<title>access denied</title>",
+        "<title>just a moment...</title>",
+        "<title>attention required! | cloudflare</title>",
+        "<title>security challenge</title>",
+        "<title>human verification</title>",
+        "<title>robot or human?</title>",
+        "<title>crumbs.</title>",
+        "cf-chl-bypass",
+        "turnstile",
+        "enable javascript and cookies to continue"
+    ]
+    has_recipe_marker = (
+        '"@type": "recipe"' in lower or 
+        '"@type":"recipe"' in lower or
+        'itemtype="http://schema.org/recipe"' in lower or
+        'itemtype="https://schema.org/recipe"' in lower or
+        'wprm-recipe' in lower or
+        'tasty-recipes' in lower
+    )
+    if not has_recipe_marker:
+        for signal in block_signals:
+            if signal in lower:
+                return True
+    return False
+
+def fetch_html_from_url(url: str) -> str:
+    """Multi-tiered HTML fetcher with TLS impersonation, browser client hints, and CLI curl fallback."""
+    last_err = None
+    is_404 = False
+
+    # Tier 1: curl_cffi with Chrome TLS impersonation (bypasses Akamai/Cloudflare/Dotdash anti-bot)
+    try:
+        from curl_cffi import requests as cffi_requests
+        for target in ["chrome124", "chrome120", "chrome119"]:
+            try:
+                resp = cffi_requests.get(
+                    url,
+                    impersonate=target,
+                    headers=BROWSER_HEADERS,
+                    timeout=12,
+                    verify=True
+                )
+                if resp.status_code == 200 and resp.text and not is_bot_blocked_html(resp.text):
+                    return resp.text
+                elif resp.status_code == 404:
+                    is_404 = True
+            except Exception as e:
+                last_err = e
+    except ImportError:
+        pass
+    except Exception as e:
+        last_err = e
+
+    # Tier 2: Standard Python requests session with full modern browser headers
+    try:
+        session = requests.Session()
+        session.headers.update(BROWSER_HEADERS)
+        resp = session.get(url, timeout=12, allow_redirects=True)
+        if resp.status_code == 200 and resp.text and not is_bot_blocked_html(resp.text):
+            return resp.text
+        elif resp.status_code == 404:
+            is_404 = True
+    except Exception as e:
+        last_err = e
+
+    # Tier 3: CLI curl execution fallback (available inside Docker container)
+    try:
+        cmd = [
+            "curl",
+            "-fsL",
+            "--max-time", "12",
+            "-H", f"User-Agent: {BROWSER_HEADERS['User-Agent']}",
+            "-H", f"Accept: {BROWSER_HEADERS['Accept']}",
+            "-H", f"Accept-Language: {BROWSER_HEADERS['Accept-Language']}",
+            url
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14)
+        if proc.returncode == 0 and proc.stdout and not is_bot_blocked_html(proc.stdout):
+            return proc.stdout
+    except Exception as e:
+        last_err = e
+
+    domain = re.sub(r"^https?://", "", url).split("/")[0]
+    if is_404:
+        raise ValueError(f"Recipe page not found (404) at '{url}'. Please check that the URL is correct.")
+    raise ValueError(
+        f"Could not connect to '{domain}' (Network unreachable or request blocked). "
+        f"If the site blocks automated requests or you are offline, switch to the 'Paste Recipe Text' tab to import directly!"
+    ) from last_err
+
+
 def scrape_recipe_from_url(url_or_text: str) -> dict:
     """Scrape and normalize recipe details from URL or raw text."""
     clean_input = url_or_text.strip()
@@ -319,39 +427,9 @@ def scrape_recipe_from_url(url_or_text: str) -> dict:
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
 
-    html_text = ""
-    fetch_error = None
+    html_text = fetch_html_from_url(url)
 
-    # 1. First attempt: curl_cffi with Chrome TLS impersonation (bypasses Akamai/Cloudflare bot blocking)
-    try:
-        try:
-            from curl_cffi import requests as cffi_requests
-            resp = cffi_requests.get(url, impersonate="chrome124", timeout=12)
-            if resp.status_code == 200:
-                html_text = resp.text
-            elif resp.status_code != 403 and resp.status_code != 429:
-                resp.raise_for_status()
-        except ImportError:
-            pass
-    except Exception as e:
-        fetch_error = e
-
-    # 2. Second attempt: standard requests session with modern browser headers
-    if not html_text:
-        try:
-            session = requests.Session()
-            session.headers.update(BROWSER_HEADERS)
-            resp = session.get(url, timeout=12)
-            resp.raise_for_status()
-            html_text = resp.text
-        except Exception as req_err:
-            domain = re.sub(r"^https?://", "", url).split("/")[0]
-            raise ValueError(
-                f"Could not connect to '{domain}' (Network unreachable or request blocked). "
-                f"If the site blocks automated requests or you are offline, switch to the 'Paste Recipe Text' tab to import directly!"
-            ) from (fetch_error or req_err)
-
-    # 2. Try recipe-scrapers using the pre-fetched HTML
+    # 1. Try recipe-scrapers using the pre-fetched HTML
     try:
         scraper = scrape_html(html=html_text, org_url=url, wild_mode=True)
         title = scraper.title()
@@ -402,6 +480,6 @@ def scrape_recipe_from_url(url_or_text: str) -> dict:
     except Exception:
         pass
 
-    # 3. Fallback to schema.org / microdata / CMS class parser
+    # 2. Fallback to schema.org / microdata / CMS class parser
     return fallback_json_ld_scrape(url, html_text)
 
