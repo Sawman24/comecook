@@ -56,6 +56,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         const q = searchInput.value.trim();
         if (q) {
           searchDropdown.style.display = "none";
+          if (q.startsWith("@")) {
+            const targetUser = q.substring(1).trim();
+            if (targetUser) {
+              openUserProfile(targetUser);
+              return;
+            }
+          }
           if (currentActiveView === "recipes") {
             fetchAndRenderRecipes(q);
           } else if (currentActiveView === "feed") {
@@ -326,14 +333,33 @@ function renderGlobalSearchDropdown(data, query) {
   }
 
   let html = "";
+  const isUserSpecificSearch = query.trim().startsWith("@");
 
-  // 1. Recipes Section
-  if (recipes.length > 0) {
-    html += `<div class="search-section-header">Recipes (${recipes.length})</div>`;
+  const renderChefsSection = () => {
+    if (chefs.length === 0) return "";
+    let s = `<div class="search-section-header">Chefs & Cooks (${chefs.length})</div>`;
+    chefs.forEach(c => {
+      s += `
+        <div class="search-result-item" onclick="selectSearchResult('chef', '${escapeHtml(c.username)}')">
+          <img src="${escapeHtml(c.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="search-result-thumb" style="border-radius: 50%;" alt="${escapeHtml(c.username)}" />
+          <div class="search-result-info">
+            <span class="search-result-title">${escapeHtml(c.display_name || c.username)}</span>
+            <span class="search-result-subtitle">@${escapeHtml(c.username)} • ${c.recipe_count} recipes • ${c.follower_count} followers</span>
+          </div>
+          ${c.is_following ? '<span class="badge" style="background:var(--bg-surface-subtle); color:var(--text-light); font-size:0.7rem;">Following</span>' : ''}
+        </div>
+      `;
+    });
+    return s;
+  };
+
+  const renderRecipesSection = () => {
+    if (recipes.length === 0) return "";
+    let s = `<div class="search-section-header">Recipes (${recipes.length})</div>`;
     recipes.forEach(r => {
       const timeStr = r.cook_time_min ? `${r.cook_time_min}m cook` : (r.prep_time_min ? `${r.prep_time_min}m prep` : "");
       const meta = [r.cuisine, timeStr, `by ${r.display_name || r.username}`].filter(Boolean).join(" • ");
-      html += `
+      s += `
         <div class="search-result-item" onclick="selectSearchResult('recipe', ${r.id})">
           <img src="${escapeHtml(r.image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=100')}" class="search-result-thumb" alt="${escapeHtml(r.title)}" />
           <div class="search-result-info">
@@ -343,46 +369,32 @@ function renderGlobalSearchDropdown(data, query) {
         </div>
       `;
     });
-  }
+    return s;
+  };
 
-  // 2. Chefs Section
-  if (chefs.length > 0) {
-    html += `<div class="search-section-header">Chefs (${chefs.length})</div>`;
-    chefs.forEach(c => {
-      html += `
-        <div class="search-result-item" onclick="selectSearchResult('chef', '${escapeHtml(c.username)}')">
-          <img src="${escapeHtml(c.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="search-result-thumb" style="border-radius: 50%;" alt="${escapeHtml(c.username)}" />
+  const renderStationsSection = () => {
+    if (stations.length === 0) return "";
+    let s = `<div class="search-section-header">Kitchen Stations (${stations.length})</div>`;
+    stations.forEach(st => {
+      s += `
+        <div class="search-result-item" onclick="selectSearchResult('station', '${escapeHtml(st.slug)}')">
+          <div class="search-result-icon">${escapeHtml(st.icon || '🍳')}</div>
           <div class="search-result-info">
-            <span class="search-result-title">${escapeHtml(c.display_name || c.username)}</span>
-            <span class="search-result-subtitle">@${escapeHtml(c.username)} • ${c.recipe_count} recipes • ${c.follower_count} followers</span>
+            <span class="search-result-title">${escapeHtml(st.name)}</span>
+            <span class="search-result-subtitle">${st.member_count || 0} cooks joined</span>
           </div>
         </div>
       `;
     });
-  }
+    return s;
+  };
 
-  // 3. Stations Section
-  if (stations.length > 0) {
-    html += `<div class="search-section-header">Kitchen Stations (${stations.length})</div>`;
-    stations.forEach(s => {
-      html += `
-        <div class="search-result-item" onclick="selectSearchResult('station', '${escapeHtml(s.slug)}')">
-          <div class="search-result-icon">${escapeHtml(s.icon || '🍳')}</div>
-          <div class="search-result-info">
-            <span class="search-result-title">${escapeHtml(s.name)}</span>
-            <span class="search-result-subtitle">${s.member_count || 0} cooks joined</span>
-          </div>
-        </div>
-      `;
-    });
-  }
-
-  // 4. Community Posts Section
-  if (posts.length > 0) {
-    html += `<div class="search-section-header">Community Discussions (${posts.length})</div>`;
+  const renderPostsSection = () => {
+    if (posts.length === 0) return "";
+    let s = `<div class="search-section-header">Community Discussions (${posts.length})</div>`;
     posts.forEach(p => {
       const typeLabel = p.post_type === 'question' ? '❓ Question' : (p.post_type === 'showcase' ? '📸 Showcase' : '💬 Post');
-      html += `
+      s += `
         <div class="search-result-item" onclick="selectSearchResult('feed', ${p.id})">
           <img src="${escapeHtml(p.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="search-result-thumb" style="border-radius: 50%;" alt="${escapeHtml(p.username)}" />
           <div class="search-result-info">
@@ -392,6 +404,19 @@ function renderGlobalSearchDropdown(data, query) {
         </div>
       `;
     });
+    return s;
+  };
+
+  if (isUserSpecificSearch) {
+    html += renderChefsSection();
+    html += renderRecipesSection();
+    html += renderStationsSection();
+    html += renderPostsSection();
+  } else {
+    html += renderRecipesSection();
+    html += renderChefsSection();
+    html += renderStationsSection();
+    html += renderPostsSection();
   }
 
   container.innerHTML = html;

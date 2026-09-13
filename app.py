@@ -465,6 +465,47 @@ def get_featured_chefs():
     return jsonify({"chefs": chefs})
 
 
+@app.route("/api/users", methods=["GET"])
+def get_users_list():
+    query = (request.args.get("q") or "").strip()
+    clean_query = query.lstrip("@").strip()
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if clean_query:
+        search_param = f"%{clean_query}%"
+        cursor.execute("""
+            SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
+                   (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count,
+                   (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
+            FROM users u
+            WHERE u.is_active = 1
+              AND (u.username LIKE ? OR u.display_name LIKE ? OR u.bio LIKE ?)
+            ORDER BY follower_count DESC, recipe_count DESC
+            LIMIT 30;
+        """, (search_param, search_param, search_param))
+    else:
+        cursor.execute("""
+            SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
+                   (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count,
+                   (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
+            FROM users u
+            WHERE u.is_active = 1
+            ORDER BY follower_count DESC, recipe_count DESC
+            LIMIT 30;
+        """)
+
+    users = [dict(r) for r in cursor.fetchall()]
+    if current_user:
+        for u in users:
+            cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], u["id"]))
+            u["is_following"] = bool(cursor.fetchone())
+
+    conn.close()
+    return jsonify({"users": users})
+
+
 # ==============================================================================
 # GLOBAL UNIFIED SEARCH ENDPOINT
 # ==============================================================================
@@ -479,6 +520,8 @@ def global_search():
     conn = get_db_connection()
     cursor = conn.cursor()
     search_param = f"%{query}%"
+    clean_user_query = query.lstrip("@").strip()
+    user_search_param = f"%{clean_user_query}%"
 
     # 1. Search Recipes
     cursor.execute("""
@@ -493,7 +536,7 @@ def global_search():
     """, (current_user["id"] if current_user else -1, search_param, search_param, search_param, search_param))
     recipes = [dict(row) for row in cursor.fetchall()]
 
-    # 2. Search Chefs / Users
+    # 2. Search Chefs / Users (Handles @username, display name, and bio)
     cursor.execute("""
         SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
                (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count,
@@ -502,9 +545,14 @@ def global_search():
         WHERE u.is_active = 1
           AND (u.username LIKE ? OR u.display_name LIKE ? OR u.bio LIKE ?)
         ORDER BY follower_count DESC, recipe_count DESC
-        LIMIT 4;
-    """, (search_param, search_param, search_param))
+        LIMIT 6;
+    """, (user_search_param, user_search_param, user_search_param))
     chefs = [dict(row) for row in cursor.fetchall()]
+
+    if current_user:
+        for chef in chefs:
+            cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], chef["id"]))
+            chef["is_following"] = bool(cursor.fetchone())
 
     # 3. Search Stations
     cursor.execute("""

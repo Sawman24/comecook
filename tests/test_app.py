@@ -257,5 +257,16 @@ class CookedTestCase(unittest.TestCase):
         self.assertIn("chefs", data)
         self.assertIn("posts", data)
 
+        # Search for user with @ prefix
+        user_res = self.client.get("/api/search?q=@headchef")
+        self.assertEqual(user_res.status_code, 200)
+        user_data = user_res.get_json()
+        self.assertTrue(any(c["username"] == "headchef" for c in user_data["chefs"]))
+
+        # Verify /api/users endpoint
+        list_users_res = self.client.get("/api/users?q=chef")
+        self.assertEqual(list_users_res.status_code, 200)
+        self.assertIn("users", list_users_res.get_json())
+
 if __name__ == "__main__":
     unittest.main()
