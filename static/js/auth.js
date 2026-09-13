@@ -148,16 +148,14 @@ function openAuthModal(mode = "login") {
   } else {
     titleEl.textContent = "Reset Your Password";
     bodyEl.innerHTML = `
-      <form onsubmit="handleForgotSubmit(event)">
-        <div class="form-group">
-          <label>Email Address</label>
-          <input type="email" id="forgot-email" class="form-control" required placeholder="Enter registered email" />
-        </div>
-        <button type="submit" class="btn btn-primary" style="width: 100%;">Generate Reset Token</button>
-        <p style="text-align: center; margin-top: 1rem; font-size: 0.85rem;">
-          <a href="javascript:void(0)" onclick="openAuthModal('login')">Back to Login</a>
+      <div style="text-align: center; padding: 1.25rem 0.5rem;">
+        <div style="font-size: 2.25rem; margin-bottom: 0.75rem;">🔒</div>
+        <h4 style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 700; color: var(--text-color);">Password Reset Paused</h4>
+        <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1.5rem;">
+          Self-service password reset is temporarily disabled while automated email verification is being configured. If you need assistance accessing your account, please reach out to the site administrator.
         </p>
-      </form>
+        <button type="button" class="btn btn-primary" style="width: 100%;" onclick="openAuthModal('login')">Back to Login</button>
+      </div>
     `;
   }
 
@@ -281,69 +279,29 @@ async function handleRegisterSubmit(e) {
 
 async function handleForgotSubmit(e) {
   e.preventDefault();
-  const email = document.getElementById("forgot-email").value;
   try {
+    const email = (document.getElementById("forgot-email")?.value || "").trim();
     const data = await apiRequest("/api/auth/forgot-password", {
       method: "POST",
       body: JSON.stringify({ email })
     });
-    if (data.dev_reset_token) {
-      showToast("Reset token generated! (Dev Fallback)", "info");
-      // Present token reset form
-      promptResetPassword(data.dev_reset_token);
-    } else {
-      showToast(data.message, "success");
-      closeAuthModal();
-    }
+    showToast(data.message || "Password reset is temporarily disabled.", "info");
+    openAuthModal("login");
   } catch (err) {
-    showToast(err.message, "error");
+    showToast(err.message || "Password reset is temporarily disabled.", "error");
+    openAuthModal("login");
   }
 }
 
 function promptResetPassword(token) {
-  const titleEl = document.getElementById("auth-modal-title");
-  const bodyEl = document.getElementById("auth-modal-form");
-  titleEl.textContent = "Set New Strong Password";
-  bodyEl.innerHTML = `
-    <form onsubmit="handleResetPasswordSubmit(event, '${token}')">
-      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-        Reset token verified. Enter your new password below:
-      </p>
-      <div class="form-group">
-        <label>New Password</label>
-        <input type="password" id="reset-new-password" class="form-control" required minlength="8" placeholder="Enter new strong password" oninput="evaluatePasswordStrength(this.value, 'reset-pw-feedback')" />
-        <div id="reset-pw-feedback" class="password-feedback-container">
-          <div class="password-strength-wrap">
-            <div class="password-strength-bar"><div class="password-strength-fill" id="reset-pw-fill"></div></div>
-            <span class="password-strength-text" id="reset-pw-text">Password strength</span>
-          </div>
-          <div class="password-reqs-grid">
-            <span class="password-req-item" id="reset-req-len">○ 8+ Characters</span>
-            <span class="password-req-item" id="reset-req-upper">○ Uppercase (A-Z)</span>
-            <span class="password-req-item" id="reset-req-lower">○ Lowercase (a-z)</span>
-            <span class="password-req-item" id="reset-req-num">○ Number (0-9)</span>
-            <span class="password-req-item" id="reset-req-sym">○ Special Symbol (!@#$)</span>
-          </div>
-        </div>
-      </div>
-      <button type="submit" class="btn btn-primary" style="width: 100%;">Update Password</button>
-    </form>
-  `;
+  showToast("Password reset is temporarily disabled.", "info");
+  openAuthModal("login");
 }
 
 async function handleResetPasswordSubmit(e, token) {
   e.preventDefault();
-  const new_password = document.getElementById("reset-new-password").value;
-  try {
-    const data = await apiRequest("/api/auth/reset-password", {
-      method: "POST",
-      body: JSON.stringify({ token, new_password })
-    });
-    showToast(data.message, "success");
-    openAuthModal("login");
-  } catch (err) {
-    showToast(err.message, "error");
-  }
+  showToast("Password reset is temporarily disabled.", "error");
+  openAuthModal("login");
 }
 
 async function handleLogout() {

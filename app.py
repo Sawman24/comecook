@@ -640,68 +640,17 @@ def get_me():
 
 @app.route("/api/auth/forgot-password", methods=["POST"])
 def forgot_password():
-    data = request.get_json() or {}
-    email = (data.get("email") or "").strip().lower()
-    if not email:
-        return jsonify({"error": "Validation Error", "message": "Email is required"}), 400
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM users WHERE email = ?;", (email,))
-    user = cursor.fetchone()
-
-    token = secrets.token_urlsafe(32)
-    if user:
-        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-            INSERT INTO password_resets (user_id, token, expires_at)
-            VALUES (?, ?, ?);
-        """, (user["id"], token, expires_at))
-        conn.commit()
-
-    conn.close()
-    # Dev Fallback response containing token for quick testability
     return jsonify({
-        "success": True,
-        "message": "If this email exists, a password reset link has been generated.",
-        "dev_reset_token": token if user else None
-    })
+        "error": "Feature Disabled",
+        "message": "Password reset is temporarily disabled while automated email delivery is being configured. Please contact the site administrator for account assistance."
+    }), 400
 
 @app.route("/api/auth/reset-password", methods=["POST"])
 def reset_password():
-    data = request.get_json() or {}
-    token = data.get("token") or ""
-    new_password = data.get("new_password") or ""
-
-    if not token:
-        return jsonify({"error": "Validation Error", "message": "Reset token is required"}), 400
-
-    is_valid_pw, pw_err = validate_password_strength(new_password)
-    if not is_valid_pw:
-        return jsonify({"error": "Validation Error", "message": pw_err}), 400
-
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, user_id FROM password_resets
-        WHERE token = ? AND expires_at > ? AND used = 0;
-    """, (token, now_str))
-    reset_entry = cursor.fetchone()
-
-    if not reset_entry:
-        conn.close()
-        return jsonify({"error": "Invalid Token", "message": "Password reset token is invalid or expired"}), 400
-
-    pw_hash = hash_password(new_password)
-    cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?;", (pw_hash, reset_entry["user_id"]))
-    cursor.execute("UPDATE password_resets SET used = 1 WHERE id = ?;", (reset_entry["id"],))
-    # Invalidate existing active sessions for security
-    cursor.execute("DELETE FROM sessions WHERE user_id = ?;", (reset_entry["user_id"],))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"success": True, "message": "Password successfully reset. Please log in with your new password."})
+    return jsonify({
+        "error": "Feature Disabled",
+        "message": "Password reset is temporarily disabled while automated email delivery is being configured. Please contact the site administrator for account assistance."
+    }), 400
 
 
 # ==============================================================================

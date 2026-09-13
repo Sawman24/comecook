@@ -330,5 +330,19 @@ class TestAdvancedSocialSuite(unittest.TestCase):
         dm_ok = bob.post(f"/api/messages/{alice_id}", json={"message": "Glad we made up!"})
         self.assertEqual(dm_ok.status_code, 201)
 
+    # --------------------------------------------------------------------------
+    # 8. PASSWORD RESET DISABLED CHECK
+    # --------------------------------------------------------------------------
+    def test_08_password_reset_is_safely_disabled(self):
+        client = app.test_client()
+        forgot_res = client.post("/api/auth/forgot-password", json={"email": "whisperer1@example.com"})
+        self.assertEqual(forgot_res.status_code, 400)
+        self.assertIn("disabled", forgot_res.get_json()["message"].lower())
+        self.assertNotIn("dev_reset_token", forgot_res.get_json())
+
+        reset_res = client.post("/api/auth/reset-password", json={"token": "sometoken", "new_password": "NewPassword123!"})
+        self.assertEqual(reset_res.status_code, 400)
+        self.assertIn("disabled", reset_res.get_json()["message"].lower())
+
 if __name__ == "__main__":
     unittest.main()
