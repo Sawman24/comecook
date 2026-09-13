@@ -6,21 +6,81 @@ let currentRecipeScope = "all";
 let activeRecipeDetail = null;
 let currentServingsScale = 1.0;
 
+const DAILY_INSPIRATIONS = [
+  {
+    tag: "🌟 Daily Bake",
+    title: "Artisan Sourdough Boule & Herb Butter",
+    desc: "Open airy crumb with blistered cast-iron crust. Master wild yeast fermentation, dough hydration, and Dutch oven steam baking.",
+    image: "https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200&auto=format&fit=crop",
+    technique: "Wild Yeast Fermentation"
+  },
+  {
+    tag: "🍝 Daily Classic",
+    title: "Authentic Roman Cacio e Pepe",
+    desc: "A velvety emulsified sauce of aged Pecorino Romano, starchy pasta water, and toasted cracked tellicherry peppercorns.",
+    image: "https://images.unsplash.com/photo-1621996346565-e3d5d6281290?w=1200&auto=format&fit=crop",
+    technique: "Starch Water Emulsion"
+  },
+  {
+    tag: "🥩 Cast Iron Mastery",
+    title: "Reverse-Seared Ribeye & Garlic Butter",
+    desc: "Edge-to-edge perfect medium rare with a blistered crust, basted generously in foaming rosemary-garlic brown butter.",
+    image: "https://images.unsplash.com/photo-1558030006-450675393462?w=1200&auto=format&fit=crop",
+    technique: "Pan-Basting & Reverse Sear"
+  },
+  {
+    tag: "🥖 Artisan Bakery",
+    title: "Crispy Olive Oil & Rosemary Focaccia",
+    desc: "Dimpled golden crust saturated in extra virgin olive oil, flaky Maldon sea salt, and caramelized garlic confit cloves.",
+    image: "https://images.unsplash.com/photo-1589367920969-ab8e050bbb04?w=1200&auto=format&fit=crop",
+    technique: "High Hydration Dough"
+  },
+  {
+    tag: "🍲 Slow Cooking",
+    title: "Slow-Braised Red Wine Beef Short Ribs",
+    desc: "Melt-in-your-mouth tender short ribs braised with aromatics, cabernet reduction, and served over creamy mascarpone polenta.",
+    image: "https://images.unsplash.com/photo-1544025162-d76694265947?w=1200&auto=format&fit=crop",
+    technique: "Low & Slow Braising"
+  },
+  {
+    tag: "🍜 Umami Craft",
+    title: "Rich 24-Hour Tonkotsu Ramen",
+    desc: "Silky collagen-rich broth paired with springy noodles, ajitsuke tamago ramen egg, and melt-apart chashu pork belly.",
+    image: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=1200&auto=format&fit=crop",
+    technique: "Bone Marrow Emulsification"
+  },
+  {
+    tag: "🥧 Sweet Finale",
+    title: "Rustic Summer Berry & Honey Galette",
+    desc: "Free-form all-butter flaky pastry bursting with seasonal wild berries, lemon thyme, and a drizzle of wildflower honey.",
+    image: "https://images.unsplash.com/photo-1565958011703-44f9829ba187?w=1200&auto=format&fit=crop",
+    technique: "Laminated Butter Pastry"
+  }
+];
+
+function getDailyInspirationDish() {
+  const now = new Date();
+  const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+  const idx = dayOfYear % DAILY_INSPIRATIONS.length;
+  return DAILY_INSPIRATIONS[idx];
+}
+
 async function loadRecipesView(scope = "all") {
   currentRecipeScope = scope;
   const container = document.getElementById("main-content-view");
   if (!container) return;
 
   const isHeroVisible = scope === "all";
+  const dailyDish = getDailyInspirationDish();
 
   container.innerHTML = `
     ${isHeroVisible ? `
-      <!-- Kitchen Hub Hero Inspiration Banner -->
-      <div class="kitchen-hub-hero">
+      <!-- Kitchen Hub Hero Inspiration Banner (Rotates Daily) -->
+      <div class="kitchen-hub-hero" style="background: linear-gradient(135deg, rgba(35, 93, 67, 0.92), rgba(24, 68, 49, 0.95)), url('${escapeHtml(dailyDish.image)}') center/cover;">
         <div class="kitchen-hub-hero-content">
-          <div class="kitchen-hub-hero-tag">🌟 Chef's Daily Inspiration</div>
-          <h1>Artisan Sourdough Boule & Herb Butter</h1>
-          <p>Open airy crumb with blistered cast-iron crust. Master wild yeast fermentation, dough hydration, and Dutch oven steam baking.</p>
+          <div class="kitchen-hub-hero-tag">${escapeHtml(dailyDish.tag)} • Technique: ${escapeHtml(dailyDish.technique)}</div>
+          <h1>${escapeHtml(dailyDish.title)}</h1>
+          <p>${escapeHtml(dailyDish.desc)}</p>
           <div class="kitchen-hub-hero-actions">
             <button class="btn-hero-primary" onclick="openRecipeEditorModal()">
               <span>🍳</span> Write New Recipe
