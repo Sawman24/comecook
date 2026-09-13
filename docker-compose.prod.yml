@@ -46,6 +46,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    sysctls:
+      - net.core.somaxconn=8192
+      - net.ipv4.tcp_max_syn_backlog=8192
 
   caddy:
     image: caddy:2-alpine
