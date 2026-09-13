@@ -66,8 +66,8 @@ def validate_password_strength(password: str) -> tuple[bool, str | None]:
     return (True, None)
 
 def hash_password(password: str) -> str:
-    """Hash password using Werkzeug PBKDF2-HMAC-SHA256 with calibrated work factor."""
-    return generate_password_hash(password, method="pbkdf2:sha256:80000", salt_length=16)
+    """Hash password using Werkzeug PBKDF2-HMAC-SHA256 with calibrated work factor for concurrency."""
+    return generate_password_hash(password, method="pbkdf2:sha256:50000", salt_length=16)
 
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify password against stored hash."""

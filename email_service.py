@@ -8,11 +8,13 @@ import html
 import smtplib
 import threading
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 
 logger = logging.getLogger("cooked.email")
+_EMAIL_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="email-worker")
 
 def get_smtp_config():
     """Load SMTP configuration from environment variables."""
@@ -131,14 +133,8 @@ def _send_smtp_payload(to_email: str, subject: str, html_body: str, text_body: s
         return False
 
 def send_email_async(to_email: str, subject: str, html_body: str, text_body: str):
-    """Dispatch email in background thread to keep HTTP response times instant."""
-    thread = threading.Thread(
-        target=_send_smtp_payload,
-        args=(to_email, subject, html_body, text_body),
-        daemon=True
-    )
-    thread.start()
-    return thread
+    """Dispatch email using bounded thread pool to keep HTTP response times instant."""
+    return _EMAIL_EXECUTOR.submit(_send_smtp_payload, to_email, subject, html_body, text_body)
 
 # ==============================================================================
 # EMAIL TEMPLATES
