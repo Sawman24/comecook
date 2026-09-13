@@ -43,7 +43,9 @@ def get_smtp_config():
     else:
         from_addr = f"{from_name} <{from_email}>"
 
+    from_addr = from_addr.replace("comecook.net", "comecook.app")
     base_url = os.environ.get("APP_URL", os.environ.get("BASE_URL", "https://comecook.app")).rstrip("/")
+    base_url = base_url.replace("comecook.net", "comecook.app")
 
     return {
         "host": host,
@@ -60,6 +62,11 @@ def get_smtp_config():
 def _send_smtp_payload(to_email: str, subject: str, html_body: str, text_body: str):
     """Internal blocking worker to connect to SMTP and transmit email."""
     cfg = get_smtp_config()
+
+    # Safety sanitizer: unconditionally ensure zero occurrence of .net in outbound emails
+    html_body = html_body.replace("comecook.net", "comecook.app").replace("http://comecook.app", "https://comecook.app")
+    text_body = text_body.replace("comecook.net", "comecook.app").replace("http://comecook.app", "https://comecook.app")
+    subject = subject.replace("comecook.net", "comecook.app")
     
     if not cfg["is_configured"]:
         logger.info(

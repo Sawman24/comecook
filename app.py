@@ -51,13 +51,14 @@ def get_request_base_url() -> str:
     """Determine absolute base URL of the site."""
     env_url = os.environ.get("APP_URL", os.environ.get("BASE_URL", "")).strip().rstrip("/")
     if env_url:
-        return env_url
+        return env_url.replace("comecook.net", "comecook.app")
 
     if request:
         try:
             proto = "https" if is_request_secure() else "http"
             host = request.host
             if host:
+                host = host.replace("comecook.net", "comecook.app")
                 return f"{proto}://{host}"
         except Exception:
             pass
