@@ -2242,12 +2242,110 @@ textarea.form-control {
 }
 
 /* ==============================================================================
+   MOBILE BOTTOM NAVIGATION & APP BAR
+   ============================================================================== */
+
+.mobile-bottom-nav {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-bottom-nav {
+    display: flex !important;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: calc(60px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background-color: var(--bg-surface);
+    border-top: 1px solid var(--border-color);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+    z-index: 1000;
+    justify-content: space-around;
+    align-items: center;
+  }
+
+  .mobile-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-decoration: none;
+    cursor: pointer;
+    flex: 1;
+    padding: 6px 0;
+    transition: var(--transition);
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-nav-item svg {
+    width: 22px;
+    height: 22px;
+    stroke: currentColor;
+    transition: var(--transition);
+  }
+
+  .mobile-nav-item.active {
+    color: var(--primary);
+    font-weight: 700;
+  }
+
+  .mobile-nav-item.active svg {
+    stroke: var(--primary);
+    transform: scale(1.08);
+  }
+
+  .mobile-nav-item:active {
+    transform: scale(0.92);
+  }
+
+  .mobile-nav-fab {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-full);
+    background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+    color: #ffffff;
+    border: none;
+    outline: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 14px rgba(46, 125, 50, 0.4);
+    margin: -14px 4px 0 4px;
+    flex-shrink: 0;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-nav-fab:active {
+    transform: scale(0.92);
+    box-shadow: 0 2px 6px rgba(46, 125, 50, 0.3);
+  }
+
+  .mobile-nav-fab svg {
+    width: 24px;
+    height: 24px;
+    stroke: #ffffff;
+    stroke-width: 2.5;
+  }
+}
+
+/* ==============================================================================
    RESPONSIVE DESIGN (TABLET & MOBILE)
    ============================================================================== */
 
 @media (max-width: 1024px) {
   .main-layout {
     grid-template-columns: 200px 1fr;
+    gap: 1.25rem;
+    padding: 1.25rem;
   }
   .sidebar-right {
     display: none;
@@ -2255,39 +2353,280 @@ textarea.form-control {
 }
 
 @media (max-width: 768px) {
-  .main-layout {
-    grid-template-columns: 1fr;
-    padding: 1rem 0.75rem 5rem 0.75rem;
-  }
-  .sidebar-left {
-    display: none;
-  }
-  .search-bar-wrap {
-    width: 160px;
-  }
-  .recipe-interactive-grid {
-    grid-template-columns: 1fr;
-  }
-  .planner-grid {
-    grid-template-columns: 1fr;
+  /* Prevent iOS Safari viewport auto-zoom on input focus */
+  input, select, textarea, .form-control {
+    font-size: 16px !important;
   }
 
-  /* Mobile Bottom Navigation */
-  .mobile-bottom-nav {
-    display: flex !important;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 60px;
-    background-color: var(--bg-surface);
-    border-top: 1px solid var(--border-color);
-    z-index: 99;
-    justify-content: space-around;
+  /* Compact Top Navbar */
+  .navbar {
+    padding: 0.5rem 0.85rem;
+    height: 56px;
+  }
+
+  .nav-left {
+    gap: 0.75rem;
+  }
+
+  .brand-logo {
+    font-size: 1.25rem;
+    gap: 0.4rem;
+  }
+
+  .brand-logo svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .search-bar-wrap {
+    width: 150px;
+  }
+
+  .search-bar-wrap input {
+    padding: 0.35rem 0.65rem 0.35rem 2rem;
+    font-size: 0.82rem;
+  }
+
+  .search-bar-wrap .search-icon {
+    left: 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .desktop-only-btn {
+    display: none !important;
+  }
+
+  .nav-user-text {
+    display: none !important;
+  }
+
+  .avatar-sm {
+    width: 32px;
+    height: 32px;
+  }
+
+  .nav-right {
+    gap: 0.5rem;
+  }
+
+  /* Main Layout Single Column & Safe Bottom Space */
+  .main-layout {
+    grid-template-columns: 1fr !important;
+    padding: 0.85rem 0.75rem calc(72px + env(safe-area-inset-bottom, 0px)) 0.75rem !important;
+    gap: 1rem;
+    width: 100%;
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+
+  .sidebar-left,
+  .sidebar-right {
+    display: none !important;
+  }
+
+  .content-area {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* Community Feed */
+  .post-card {
+    border-radius: var(--radius-md);
+    padding: 1rem 0.85rem;
+    margin-bottom: 1rem;
+  }
+
+  .post-header {
+    gap: 0.6rem;
+  }
+
+  .post-author-name {
+    font-size: 0.9rem;
+  }
+
+  .post-meta {
+    font-size: 0.75rem;
+  }
+
+  .post-text {
+    font-size: 0.92rem;
+    line-height: 1.45;
+  }
+
+  .post-img-container img {
+    max-height: 300px;
+    border-radius: var(--radius-sm);
+  }
+
+  .post-actions-bar {
+    gap: 0.35rem;
+    padding-top: 0.65rem;
+    justify-content: space-between;
+  }
+
+  .post-action-btn {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.8rem;
+  }
+
+  .comment-item.reply {
+    margin-left: 1.25rem;
+  }
+
+  /* Recipe Box */
+  .recipe-box-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .recipe-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 4px;
+    flex-wrap: nowrap;
+  }
+
+  .recipe-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .recipe-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .recipe-hero-img {
+    height: 200px;
+  }
+
+  .recipe-detail-body {
+    padding: 1rem;
+  }
+
+  .recipe-interactive-grid {
+    grid-template-columns: 1fr !important;
+    gap: 1.25rem;
+  }
+
+  /* Meal Planner */
+  .planner-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .planner-grid {
+    grid-template-columns: 1fr !important;
+    gap: 1rem;
+  }
+
+  .planner-day-card {
+    border-radius: var(--radius-md);
+  }
+
+  /* Kitchen Stations */
+  .station-hero-banner {
+    padding: 1.25rem 1rem;
+    border-radius: var(--radius-md);
+  }
+
+  .station-hero-title {
+    font-size: 1.35rem;
+  }
+
+  .station-hero-bottom {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .station-hero-stats {
+    gap: 1.25rem;
+  }
+
+  .station-workstation-grid {
+    grid-template-columns: 1fr !important;
+    gap: 1rem;
+  }
+
+  .stations-directory-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  /* Modals & Dialogs (Touch friendly bottom sheet / popup) */
+  .modal-backdrop {
+    padding: 0.5rem;
+    align-items: flex-end;
+  }
+
+  .modal-dialog {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 88vh;
+    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-md) var(--radius-md);
+    margin: 0;
+  }
+
+  .modal-header {
+    padding: 0.85rem 1rem;
+  }
+
+  .modal-body {
+    padding: 1rem;
+    max-height: calc(88vh - 110px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Profile View */
+  .profile-header-card {
+    padding: 1.25rem 1rem;
+    border-radius: var(--radius-md);
+  }
+
+  .profile-banner-wrap {
+    flex-direction: column;
     align-items: center;
+    text-align: center;
+    gap: 1rem;
+  }
+
+  .profile-stats-grid {
+    justify-content: center;
+    gap: 1.25rem;
+  }
+
+  .profile-tabs-bar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+  }
+
+  .profile-tabs-bar::-webkit-scrollbar {
+    display: none;
   }
 }
 
-.mobile-bottom-nav {
-  display: none;
+@media (max-width: 480px) {
+  .brand-logo span {
+    display: none;
+  }
+
+  .search-bar-wrap {
+    width: 120px;
+  }
+
+  .post-actions-bar {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .post-action-btn {
+    padding: 0.3rem 0.45rem;
+    font-size: 0.75rem;
+  }
 }

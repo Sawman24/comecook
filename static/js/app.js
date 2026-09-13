@@ -48,9 +48,17 @@ function navigateTo(viewName) {
   currentActiveView = viewName;
   window.location.hash = viewName;
 
-  // Update left sidebar active classes
+  // Update left sidebar and mobile bottom nav active classes
   document.querySelectorAll(".nav-item").forEach(item => {
     if (item.getAttribute("data-view") === viewName) {
+      item.classList.add("active");
+    } else {
+      item.classList.remove("active");
+    }
+  });
+
+  document.querySelectorAll(".mobile-nav-item").forEach(item => {
+    if (item.getAttribute("data-mobile-view") === viewName) {
       item.classList.add("active");
     } else {
       item.classList.remove("active");
