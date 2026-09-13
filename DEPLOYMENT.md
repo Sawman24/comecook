@@ -86,7 +86,7 @@ SMTP_USER=cooked.noreply@gmail.com
 SMTP_PASSWORD=your_16_char_google_app_password
 SMTP_USE_TLS=1
 EMAIL_FROM=Cooked <cooked.noreply@gmail.com>
-APP_URL=https://comecook.net
+APP_URL=https://comecook.app
 ```
 
 ---
@@ -109,7 +109,7 @@ APP_URL=https://comecook.net
    | :--- | :--- | :--- |
    | `SECRET_KEY` | `(64-char random hex key)` | Session encryption key |
    | `HOST_PORT` | `8080` (or `3000`, `5055`) | **Change this to avoid port 5050 conflict on your host!** |
-   | `DOMAIN` | `comecook.net` | Your domain name |
+   | `DOMAIN` | `comecook.app` | Your domain name |
    | `COOKED_ENV` | `production` | Production mode |
    | `SESSION_COOKIE_SECURE` | `1` | Enforce HTTPS cookies |
    | `COOKED_SEED_DEMO` | `0` | 0 = clean database for real users |
@@ -120,7 +120,7 @@ APP_URL=https://comecook.net
    | `SMTP_USE_TLS` | `1` | `1` for TLS |
    | `SMTP_FROM_NAME` | `Cooked` | Sender display name |
    | `SMTP_FROM_EMAIL` | `cooked.noreply@gmail.com` | Sender email address |
-   | `APP_URL` | `https://comecook.net` | Absolute base URL for reset links |
+   | `APP_URL` | `https://comecook.app` | Absolute base URL for reset links |
 6. Click **Deploy the stack**!
 
 ---

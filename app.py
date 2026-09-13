@@ -49,9 +49,9 @@ def is_request_secure() -> bool:
 
 def get_request_base_url() -> str:
     """Determine absolute base URL of the site."""
-    cfg = get_smtp_config()
-    if cfg["base_url"] and cfg["base_url"] != "https://comecook.net":
-        return cfg["base_url"]
+    env_url = os.environ.get("APP_URL", os.environ.get("BASE_URL", "")).strip().rstrip("/")
+    if env_url:
+        return env_url
 
     if request:
         try:
@@ -61,7 +61,7 @@ def get_request_base_url() -> str:
                 return f"{proto}://{host}"
         except Exception:
             pass
-    return cfg["base_url"]
+    return "https://comecook.app"
 
 
 @app.after_request

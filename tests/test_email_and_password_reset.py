@@ -187,9 +187,9 @@ class TestEmailAndPasswordReset(unittest.TestCase):
 
     def test_08_email_templates_render_without_error(self):
         # Verify template functions execute and return valid threads/objects
-        t1 = send_welcome_email("test@example.com", "chef_test", "Chef Test", "https://comecook.net")
-        t2 = send_password_reset_email("test@example.com", "chef_test", "sample_token", "https://comecook.net")
-        t3 = send_password_changed_email("test@example.com", "chef_test", "https://comecook.net")
+        t1 = send_welcome_email("test@example.com", "chef_test", "Chef Test", "https://comecook.app")
+        t2 = send_password_reset_email("test@example.com", "chef_test", "sample_token", "https://comecook.app")
+        t3 = send_password_changed_email("test@example.com", "chef_test", "https://comecook.app")
         self.assertIsNotNone(t1)
         self.assertIsNotNone(t2)
         self.assertIsNotNone(t3)

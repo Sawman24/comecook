@@ -43,7 +43,7 @@ def get_smtp_config():
     else:
         from_addr = f"{from_name} <{from_email}>"
 
-    base_url = os.environ.get("APP_URL", os.environ.get("BASE_URL", "https://comecook.net")).rstrip("/")
+    base_url = os.environ.get("APP_URL", os.environ.get("BASE_URL", "https://comecook.app")).rstrip("/")
 
     return {
         "host": host,
