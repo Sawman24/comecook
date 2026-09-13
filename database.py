@@ -7,7 +7,7 @@ from werkzeug.security import generate_password_hash
 DB_PATH = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "cooked.db")))
 
 def get_db_connection():
-    """Create a high-performance SQLite connection with WAL mode and memory tuning."""
+    """Create a high-performance SQLite connection with non-locking memory tuning."""
     db_path = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", DB_PATH))
     parent_dir = os.path.dirname(os.path.abspath(db_path))
     if parent_dir and not os.path.exists(parent_dir):
@@ -15,11 +15,8 @@ def get_db_connection():
     conn = sqlite3.connect(db_path, timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
     conn.execute("PRAGMA busy_timeout = 5000;")
-    conn.execute("PRAGMA wal_autocheckpoint = 1000;")
-    conn.execute("PRAGMA journal_size_limit = 67108864;")
     conn.execute("PRAGMA cache_size = -64000;")
     conn.execute("PRAGMA temp_store = MEMORY;")
     conn.execute("PRAGMA mmap_size = 268435456;")
@@ -84,6 +81,9 @@ def init_db():
 
 def _run_init_db_schema():
     conn = get_db_connection()
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA wal_autocheckpoint = 1000;")
+    conn.execute("PRAGMA journal_size_limit = 67108864;")
     cursor = conn.cursor()
 
     cursor.executescript("""
