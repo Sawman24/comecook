@@ -1,5 +1,8 @@
 import secrets
 import os
+import time
+import threading
+from collections import deque
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import request, jsonify, g
@@ -14,6 +17,15 @@ LOCKOUT_WINDOW_MINUTES = 5
 ADMIN_USERNAMES = [
     u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "headchef,admin,sawyer").split(",") if u.strip()
 ]
+
+# Thread-safe in-memory session token cache (30s TTL)
+_SESSION_CACHE = {} # token -> (user_dict, expire_timestamp)
+_SESSION_CACHE_LOCK = threading.Lock()
+_SESSION_CACHE_TTL = 30.0
+
+# Thread-safe in-memory IP rate limiter (zero disk write locks)
+_FAILED_LOGINS = {} # ip -> deque of timestamp floats
+_LOGIN_LOCK = threading.Lock()
 
 import re
 
@@ -66,40 +78,27 @@ def generate_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 def is_ip_rate_limited(ip_address: str, conn=None) -> bool:
-    """Check if the IP has exceeded 5 failed login attempts in the last 5 minutes."""
-    cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=LOCKOUT_WINDOW_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-    should_close = False
-    if conn is None:
-        conn = get_db_connection()
-        should_close = True
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT COUNT(*) AS failed_count
-        FROM login_attempts
-        WHERE ip_address = ? AND success = 0 AND attempt_time >= ?
-    """, (ip_address, cutoff_time))
-    row = cursor.fetchone()
-    if should_close:
-        conn.close()
-    return bool(row and row["failed_count"] >= MAX_FAILED_ATTEMPTS)
+    """Check if the IP has exceeded 5 failed login attempts in the last 5 minutes (in-memory)."""
+    now = time.time()
+    cutoff = now - (LOCKOUT_WINDOW_MINUTES * 60)
+    with _LOGIN_LOCK:
+        attempts = _FAILED_LOGINS.get(ip_address)
+        if not attempts:
+            return False
+        while attempts and attempts[0] < cutoff:
+            attempts.popleft()
+        return len(attempts) >= MAX_FAILED_ATTEMPTS
 
 def record_login_attempt(ip_address: str, username: str, success: bool, conn=None):
-    """Log a login attempt for rate limiting & audit."""
-    should_close = False
-    if conn is None:
-        conn = get_db_connection()
-        should_close = True
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO login_attempts (ip_address, username, attempt_time, success)
-        VALUES (?, ?, CURRENT_TIMESTAMP, ?);
-    """, (ip_address, username, 1 if success else 0))
-    if success:
-        cursor.execute("DELETE FROM login_attempts WHERE ip_address = ?;", (ip_address,))
-    conn.commit()
-    if should_close:
-        conn.close()
-
+    """Log a login attempt in-memory for instant, non-blocking rate limiting."""
+    now = time.time()
+    with _LOGIN_LOCK:
+        if success:
+            _FAILED_LOGINS.pop(ip_address, None)
+        else:
+            if ip_address not in _FAILED_LOGINS:
+                _FAILED_LOGINS[ip_address] = deque()
+            _FAILED_LOGINS[ip_address].append(now)
 
 def create_user_session(user_id: int) -> str:
     """Generate and store a session token in the database."""
@@ -116,8 +115,7 @@ def create_user_session(user_id: int) -> str:
     return token
 
 def get_authenticated_user():
-    """Retrieve the current authenticated user from session cookie or Authorization header."""
-    # Check cookie first, fallback to Authorization Bearer header
+    """Retrieve current authenticated user with sub-millisecond memory caching."""
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token and "Authorization" in request.headers:
         auth_header = request.headers.get("Authorization", "")
@@ -127,6 +125,14 @@ def get_authenticated_user():
     if not token:
         return None
 
+    # 1. Check in-memory session cache first
+    now_ts = time.time()
+    with _SESSION_CACHE_LOCK:
+        cached = _SESSION_CACHE.get(token)
+        if cached and cached[1] > now_ts:
+            return dict(cached[0])
+
+    # 2. Query DB on cache miss
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -141,13 +147,35 @@ def get_authenticated_user():
     conn.close()
 
     if user:
-        return dict(user)
+        user_dict = dict(user)
+        with _SESSION_CACHE_LOCK:
+            _SESSION_CACHE[token] = (user_dict, now_ts + _SESSION_CACHE_TTL)
+        return user_dict
+
     return None
 
+def invalidate_user_sessions(user_id: int = None, token: str = None):
+    """Invalidate session cache for a user or specific token."""
+    with _SESSION_CACHE_LOCK:
+        if token:
+            _SESSION_CACHE.pop(token, None)
+        if user_id:
+            tokens_to_remove = [k for k, v in _SESSION_CACHE.items() if v[0].get("id") == user_id]
+            for k in tokens_to_remove:
+                _SESSION_CACHE.pop(k, None)
+
+def reset_auth_caches():
+    """Clear in-memory session and rate-limit caches (useful for testing and maintenance)."""
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE.clear()
+    with _LOGIN_LOCK:
+        _FAILED_LOGINS.clear()
+
 def delete_user_session(token: str):
-    """Remove session token from database on logout."""
+    """Remove session token from database and cache on logout."""
     if not token:
         return
+    invalidate_user_sessions(token=token)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM sessions WHERE token = ?;", (token,))
@@ -177,3 +205,4 @@ def admin_required(f):
         g.current_user = user
         return f(*args, **kwargs)
     return decorated_function
+

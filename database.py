@@ -12,12 +12,14 @@ def get_db_connection():
     parent_dir = os.path.dirname(os.path.abspath(db_path))
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
+    conn = sqlite3.connect(db_path, timeout=5.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA busy_timeout = 30000;")
+    conn.execute("PRAGMA busy_timeout = 3000;")
+    conn.execute("PRAGMA wal_autocheckpoint = 1000;")
+    conn.execute("PRAGMA journal_size_limit = 67108864;")
     conn.execute("PRAGMA cache_size = -64000;")
     conn.execute("PRAGMA temp_store = MEMORY;")
     conn.execute("PRAGMA mmap_size = 268435456;")
@@ -27,6 +29,11 @@ def get_db_connection():
 
 def init_db():
     """Initialize database schema with tables and indexes."""
+    try:
+        from auth import reset_auth_caches
+        reset_auth_caches()
+    except Exception:
+        pass
     conn = get_db_connection()
     cursor = conn.cursor()
 

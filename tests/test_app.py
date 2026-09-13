@@ -225,6 +225,8 @@ class CookedTestCase(unittest.TestCase):
             "password": "ChefPass123!"
         })
         self.assertEqual(lockout_res.status_code, 429, "5 failed logins must trigger progressive rate-limit lockout")
+        from auth import reset_auth_caches
+        reset_auth_caches()
 
     def test_09_scraper_ingredient_parser(self):
         """Verify ingredient string regex parsing into quantity, unit, name."""

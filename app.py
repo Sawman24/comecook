@@ -15,7 +15,7 @@ from auth import (
     hash_password, verify_password, create_user_session,
     get_authenticated_user, delete_user_session, require_auth, admin_required,
     is_ip_rate_limited, record_login_attempt, SESSION_COOKIE_NAME, ADMIN_USERNAMES,
-    validate_password_strength
+    validate_password_strength, invalidate_user_sessions, reset_auth_caches
 )
 from moderation_filter import contains_profanity, validate_clean_content
 from scraper import scrape_recipe_from_url
@@ -921,6 +921,7 @@ def reset_password():
     # 3. Security: Invalidate all existing active sessions
     cursor.execute("DELETE FROM sessions WHERE user_id = ?;", (user_id,))
     conn.commit()
+    invalidate_user_sessions(user_id=user_id)
 
     # 4. Dispatch security alert email
     try:
@@ -3627,6 +3628,7 @@ def admin_delete_user(target_user_id):
     cursor.execute("DELETE FROM users WHERE id = ?;", (target_user_id,))
     conn.commit()
     conn.close()
+    invalidate_user_sessions(user_id=target_user_id)
     return jsonify({"success": True, "message": f"User @{target['username']} has been permanently removed"})
 
 @app.route("/api/admin/users/purge-offensive", methods=["POST"])
