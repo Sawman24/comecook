@@ -136,8 +136,9 @@ def send_email_async(to_email: str, subject: str, html_body: str, text_body: str
 # EMAIL TEMPLATES
 # ==============================================================================
 
-def get_base_html_template(title: str, preheader: str, content_html: str) -> str:
+def get_base_html_template(title: str, preheader: str, content_html: str, base_url: str = "https://comecook.app") -> str:
     """Standard responsive culinary HTML email shell."""
+    clean_host = base_url.replace("https://", "").replace("http://", "").rstrip("/")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -227,14 +228,14 @@ def get_base_html_template(title: str, preheader: str, content_html: str) -> str
       </div>
       <div class="footer">
         <p style="margin: 0 0 6px 0;">Cooked — The Modern Culinary Community</p>
-        <p style="margin: 0;">Need help? Visit our kitchen at <a href="https://comecook.net">comecook.net</a></p>
+        <p style="margin: 0;">Need help? Visit our kitchen at <a href="{base_url}">{clean_host}</a></p>
       </div>
     </div>
   </div>
 </body>
 </html>"""
 
-def send_password_reset_email(to_email: str, username: str, reset_token: str, base_url: str = "https://comecook.net"):
+def send_password_reset_email(to_email: str, username: str, reset_token: str, base_url: str = "https://comecook.app"):
     """Generate and dispatch password reset email."""
     reset_url = f"{base_url}/#/reset-password?token={reset_token}"
     subject = "Reset Your Cooked Password"
@@ -274,9 +275,9 @@ If you did not make this request, you can safely ignore this email.
 {base_url}
 """
 
-    return send_email_async(to_email, subject, get_base_html_template(subject, preheader, content_html), text_body)
+    return send_email_async(to_email, subject, get_base_html_template(subject, preheader, content_html, base_url=base_url), text_body)
 
-def send_welcome_email(to_email: str, username: str, display_name: str, base_url: str = "https://comecook.net"):
+def send_welcome_email(to_email: str, username: str, display_name: str, base_url: str = "https://comecook.app"):
     """Generate and dispatch welcome email on registration."""
     subject = "Welcome to the Cooked Kitchen! 👨‍🍳"
     preheader = f"Welcome to Cooked, Chef {display_name}! Start exploring recipes and sharing your culinary craft."
@@ -313,9 +314,9 @@ Start cooking now: {base_url}
 — The Cooked Culinary Team
 """
 
-    return send_email_async(to_email, subject, get_base_html_template(subject, preheader, content_html), text_body)
+    return send_email_async(to_email, subject, get_base_html_template(subject, preheader, content_html, base_url=base_url), text_body)
 
-def send_password_changed_email(to_email: str, username: str, base_url: str = "https://comecook.net"):
+def send_password_changed_email(to_email: str, username: str, base_url: str = "https://comecook.app"):
     """Security notification sent when a password is changed."""
     subject = "Your Cooked Password Has Been Changed"
     preheader = f"Security Alert: The password for your Cooked account @{username} was recently updated."
@@ -342,4 +343,4 @@ If you did NOT make this change, please reset your password immediately at {base
 — The Cooked Security Team
 """
 
-    return send_email_async(to_email, subject, get_base_html_template(subject, preheader, content_html), text_body)
+    return send_email_async(to_email, subject, get_base_html_template(subject, preheader, content_html, base_url=base_url), text_body)
