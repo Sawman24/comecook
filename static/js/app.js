@@ -136,9 +136,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
+function setCookingUtilitiesVisibility(visible) {
+  const timerWidget = document.getElementById("sidebar-kitchen-timer-widget");
+  const converterWidget = document.getElementById("sidebar-quick-converter-widget");
+  if (timerWidget) timerWidget.style.display = visible ? "block" : "none";
+  if (converterWidget) converterWidget.style.display = visible ? "block" : "none";
+}
+
 function navigateTo(viewName, subScope = null) {
   currentActiveView = viewName;
   window.location.hash = subScope ? `${viewName}?scope=${subScope}` : viewName;
+  setCookingUtilitiesVisibility(false);
 
   const targetNavAttr = (viewName === "recipes" && subScope === "mine") ? "my_box" : viewName;
 

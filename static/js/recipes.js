@@ -67,6 +67,9 @@ function getDailyInspirationDish() {
 
 async function loadRecipesView(scope = "all") {
   currentRecipeScope = scope;
+  if (typeof setCookingUtilitiesVisibility === "function") {
+    setCookingUtilitiesVisibility(false);
+  }
   const container = document.getElementById("main-content-view");
   if (!container) return;
 
@@ -291,6 +294,10 @@ async function viewRecipeDetail(recipeId) {
 function renderRecipeDetailView() {
   const r = activeRecipeDetail;
   if (!r) return;
+
+  if (typeof setCookingUtilitiesVisibility === "function") {
+    setCookingUtilitiesVisibility(true);
+  }
 
   const container = document.getElementById("main-content-view");
   if (!container) return;
