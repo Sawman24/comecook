@@ -222,8 +222,19 @@ async function openUserProfile(username) {
     const data = await apiRequest(`/api/users/${encodeURIComponent(username)}`);
     const user = data.user;
     const stats = data.stats;
+    const badges = data.badges || [];
     const recipes = data.recipes || [];
     const isMe = currentUser && currentUser.id === user.id;
+
+    const badgesHtml = badges.map(b => `
+      <span class="chef-badge-pill ${b.tier || 'silver'}" title="${escapeHtml(b.description)}">
+        ${escapeHtml(b.icon)} ${escapeHtml(b.name)}
+      </span>
+    `).join("");
+
+    const dietaryHtml = (user.dietary_preferences || []).map(d => `
+      <span class="dietary-chip-mini">${escapeHtml(d)}</span>
+    `).join("");
 
     container.innerHTML = `
       <div style="margin-bottom: 1rem;">
@@ -234,14 +245,32 @@ async function openUserProfile(username) {
         <div style="display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap;">
           <img src="${escapeHtml(user.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-lg" />
           <div style="flex: 1;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
-              <h2 style="font-size: 1.5rem;">${escapeHtml(user.display_name || user.username)}</h2>
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-wrap: wrap;">
+              <h2 style="font-size: 1.5rem; margin: 0;">${escapeHtml(user.display_name || user.username)}</h2>
+              ${user.is_verified ? '<span title="Verified Chef" style="font-size: 1.2rem;">⭐</span>' : ''}
               ${user.is_admin ? '<span class="badge badge-primary">Executive Chef (Admin)</span>' : ''}
             </div>
-            <div style="font-size: 0.85rem; color: var(--text-light); margin-bottom: 0.75rem;">@${escapeHtml(user.username)}</div>
-            <p style="font-size: 0.92rem; color: var(--text-main); margin-bottom: 1rem; max-width: 600px;">
+            <div style="font-size: 0.85rem; color: var(--text-light); margin-bottom: 0.5rem;">@${escapeHtml(user.username)}</div>
+
+            <!-- Earned Badges Row -->
+            ${badgesHtml ? `
+              <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+                ${badgesHtml}
+              </div>
+            ` : ''}
+
+            <!-- Bio -->
+            <p style="font-size: 0.92rem; color: var(--text-main); margin-bottom: 0.75rem; max-width: 600px;">
               ${escapeHtml(user.bio || 'Passionate home cook exploring new flavors and culinary techniques.')}
             </p>
+
+            <!-- Dietary Tags -->
+            ${dietaryHtml ? `
+              <div style="display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.85rem;">
+                <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Diet:</span>
+                ${dietaryHtml}
+              </div>
+            ` : ''}
 
             <div style="display: flex; gap: 1.5rem; font-size: 0.85rem;">
               <span><b>${stats.recipes_count}</b> Recipes</span>
@@ -258,6 +287,12 @@ async function openUserProfile(username) {
                 ${currentUser ? `
                   <button class="btn ${stats.is_following ? 'btn-secondary' : 'btn-primary'} btn-sm" onclick="toggleFollowUser(${user.id}, this)">
                     ${stats.is_following ? 'Following' : '+ Follow Chef'}
+                  </button>
+                  <button class="btn btn-secondary btn-sm" onclick="launchDirectMessageWithUser(${user.id}, '${escapeHtml(user.username)}')">
+                    💬 Whisper
+                  </button>
+                  <button class="btn btn-outline btn-sm ${stats.is_blocked_by_me ? 'btn-danger' : ''}" style="font-size: 0.78rem;" onclick="toggleBlockChef(${user.id}, '${escapeHtml(user.username)}', ${!stats.is_blocked_by_me})">
+                    ${stats.is_blocked_by_me ? 'Unblock Chef' : '🚫 Block'}
                   </button>
                 ` : ''}
                 ${currentUser && currentUser.is_admin === 1 ? `
@@ -281,6 +316,20 @@ async function openUserProfile(username) {
   }
 }
 
+async function toggleBlockChef(userId, username, shouldBlock) {
+  const actionText = shouldBlock ? `Block @${username}? You will no longer see their posts, comments, or whispers.` : `Unblock @${username}?`;
+  if (!confirm(actionText)) return;
+
+  try {
+    const method = shouldBlock ? "POST" : "DELETE";
+    const res = await apiRequest(`/api/users/${userId}/block`, { method });
+    showToast(res.message, "info");
+    openUserProfile(username);
+  } catch (err) {
+    showToast("Error updating block: " + err.message, "error");
+  }
+}
+
 /* ==============================================================================
    EDIT PROFILE MODAL
    ============================================================================== */
@@ -297,6 +346,12 @@ function openEditProfileModal() {
   document.getElementById("profile-display-input").value = currentUser.display_name || "";
   document.getElementById("profile-avatar-input").value = currentAvatar;
   document.getElementById("profile-bio-input").value = currentUser.bio || "";
+
+  // Set dietary preferences checkboxes
+  const currentDietary = currentUser.dietary_preferences || [];
+  document.querySelectorAll(".profile-dietary-checkbox").forEach(cb => {
+    cb.checked = currentDietary.includes(cb.value);
+  });
 
   const preview = document.getElementById("profile-avatar-preview");
   if (preview) {
@@ -333,7 +388,6 @@ function handleProfileAvatarUrlInput(val) {
     return;
   }
 
-  // Prepend https:// if no protocol given
   if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://") && !trimmed.startsWith("/uploads/") && !trimmed.startsWith("data:")) {
     trimmed = "https://" + trimmed;
   }
@@ -375,21 +429,18 @@ async function handleProfileAvatarFileSelect(input) {
     if (saveBtn) saveBtn.disabled = true;
     if (spinner) spinner.style.display = "flex";
 
-    // Immediate local thumbnail preview
     if (preview) {
       preview.src = URL.createObjectURL(file);
     }
 
     showToast("Uploading profile photo...", "info", 1500);
 
-    // Try client-side downsampling with raw file fallback
     let uploadBlob = file;
     try {
       if (typeof downsampleImageFile === "function") {
         uploadBlob = await downsampleImageFile(file, 1280, 1280);
       }
     } catch (downsampleErr) {
-      console.warn("Client downsample fallback to raw file:", downsampleErr);
       uploadBlob = file;
     }
 
@@ -428,7 +479,12 @@ async function handleProfileUpdateSubmit(e) {
   let avatar_url = document.getElementById("profile-avatar-input").value.trim();
   const bio = document.getElementById("profile-bio-input").value.trim();
 
-  // Normalize URL if entered without protocol
+  // Collect dietary preferences
+  const dietary_preferences = [];
+  document.querySelectorAll(".profile-dietary-checkbox:checked").forEach(cb => {
+    dietary_preferences.push(cb.value);
+  });
+
   if (avatar_url && !avatar_url.startsWith("http://") && !avatar_url.startsWith("https://") && !avatar_url.startsWith("/uploads/") && !avatar_url.startsWith("data:")) {
     avatar_url = "https://" + avatar_url;
   }
@@ -436,24 +492,21 @@ async function handleProfileUpdateSubmit(e) {
   try {
     const data = await apiRequest("/api/users/profile", {
       method: "PUT",
-      body: JSON.stringify({ display_name, avatar_url, bio })
+      body: JSON.stringify({ display_name, avatar_url, bio, dietary_preferences })
     });
     showToast(data.message || "Profile updated successfully!", "success");
     closeEditProfileModal();
 
-    // Update currentUser state
     if (currentUser) {
       currentUser.display_name = display_name;
       currentUser.avatar_url = avatar_url;
       currentUser.bio = bio;
+      currentUser.dietary_preferences = dietary_preferences;
     }
 
-    await checkAuthStatus();
-    if (currentUser && currentUser.username) {
-      openUserProfile(currentUser.username);
-    }
+    openUserProfile(currentUser.username);
   } catch (err) {
-    showToast("Error updating profile: " + err.message, "error");
+    showToast("Update failed: " + err.message, "error");
   }
 }
 

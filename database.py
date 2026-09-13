@@ -36,6 +36,8 @@ def init_db():
         bio TEXT DEFAULT '',
         is_active INTEGER DEFAULT 1,
         is_admin INTEGER DEFAULT 0,
+        is_verified INTEGER DEFAULT 0,
+        dietary_json TEXT DEFAULT '[]',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -244,6 +246,82 @@ def init_db():
         FOREIGN KEY (actor_id) REFERENCES users (id) ON DELETE CASCADE
     );
 
+    -- 17. DIRECT MESSAGES (Kitchen Whispers)
+    CREATE TABLE IF NOT EXISTS direct_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL,
+        recipient_id INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        recipe_id INTEGER,
+        post_id INTEGER,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE CASCADE,
+        FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE,
+        FOREIGN KEY (recipe_id) REFERENCES recipes (id) ON DELETE SET NULL,
+        FOREIGN KEY (post_id) REFERENCES community_posts (id) ON DELETE SET NULL
+    );
+
+    -- 18. POST REACTIONS (Culinary Emojis: heart, chef_kiss, fire, drool, genius)
+    CREATE TABLE IF NOT EXISTS post_reactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        reaction TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (post_id) REFERENCES community_posts (id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        UNIQUE (post_id, user_id)
+    );
+
+    -- 19. POST POLLS
+    CREATE TABLE IF NOT EXISTS post_polls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL UNIQUE,
+        question TEXT NOT NULL,
+        options_json TEXT NOT NULL DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (post_id) REFERENCES community_posts (id) ON DELETE CASCADE
+    );
+
+    -- 20. POLL VOTES
+    CREATE TABLE IF NOT EXISTS poll_votes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poll_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        option_index INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (poll_id) REFERENCES post_polls (id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        UNIQUE (poll_id, user_id)
+    );
+
+    -- 21. STATION WEEKLY CHALLENGES
+    CREATE TABLE IF NOT EXISTS station_challenges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        station_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        icon TEXT DEFAULT '🏆',
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (station_id) REFERENCES stations (id) ON DELETE CASCADE
+    );
+
+    -- 22. USER BLOCKS (Safety & Moderation)
+    CREATE TABLE IF NOT EXISTS user_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        blocked_user_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        FOREIGN KEY (blocked_user_id) REFERENCES users (id) ON DELETE CASCADE,
+        UNIQUE (user_id, blocked_user_id)
+    );
+
     -- PERFORMANCE INDEXES
     CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
@@ -265,6 +343,13 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_recipe_reviews_recipe ON recipe_reviews (recipe_id);
     CREATE INDEX IF NOT EXISTS idx_recipe_reviews_user ON recipe_reviews (user_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, is_read, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_direct_messages_users ON direct_messages (sender_id, recipient_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_direct_messages_inbox ON direct_messages (recipient_id, is_read, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions (post_id, reaction);
+    CREATE INDEX IF NOT EXISTS idx_post_polls_post ON post_polls (post_id);
+    CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes (poll_id, option_index);
+    CREATE INDEX IF NOT EXISTS idx_station_challenges_station ON station_challenges (station_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_user_blocks ON user_blocks (user_id, blocked_user_id);
     """)
 
     # Dynamic migrations for existing databases
@@ -278,11 +363,22 @@ def init_db():
     except Exception:
         pass
 
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_verified INTEGER DEFAULT 0;")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN dietary_json TEXT DEFAULT '[]';")
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
 
-    # Ensure default stations exist
+    # Ensure default stations and challenges exist
     seed_stations_if_empty()
+    seed_challenges_if_empty()
 
 def seed_stations_if_empty():
     """Seed the default culinary kitchen stations."""
@@ -406,6 +502,65 @@ def seed_stations_if_empty():
         SELECT COUNT(*) FROM station_members WHERE station_members.station_id = stations.id
     );
     """)
+
+    conn.commit()
+    conn.close()
+
+def seed_challenges_if_empty():
+    """Seed initial weekly culinary challenges for stations if none exist."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) AS count FROM station_challenges;")
+    row = cursor.fetchone()
+    if row and row["count"] > 0:
+        conn.close()
+        return
+
+    cursor.execute("SELECT id, slug FROM stations;")
+    stations_map = {s["slug"]: s["id"] for s in cursor.fetchall()}
+
+    now = datetime.now(timezone.utc)
+    start_str = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+    end_str = (now + timedelta(days=5)).strftime("%Y-%m-%d")
+
+    challenges = [
+        (
+            "baking-pastry",
+            "Open Crumb Sourdough Challenge",
+            "Bake a rustic artisan sourdough boule with at least 75% hydration and share your cross-section crumb shot!",
+            "#OpenCrumbChallenge",
+            "🥖"
+        ),
+        (
+            "pasta-craft",
+            "Hand-Cut Tagliatelle & Ragù",
+            "Roll and cut handmade egg pasta ribbons from scratch and emulsion-coat with your signature sauce.",
+            "#PastaScratchMaster",
+            "🍝"
+        ),
+        (
+            "smoke-castiron",
+            "Reverse Sear Ribeye Mastery",
+            "Achieve edge-to-edge wall-to-wall pink with a deep butter-basted Maillard sear.",
+            "#CastIronSear",
+            "🥩"
+        ),
+        (
+            "30-min-express",
+            "One-Skillet Pantry Raid",
+            "Create an epic dinner under 30 minutes using only one pan and whatever is in your pantry.",
+            "#30MinPantryRaid",
+            "⚡"
+        )
+    ]
+
+    for s_slug, title, desc, tag, icon in challenges:
+        if s_slug in stations_map:
+            cursor.execute("""
+            INSERT INTO station_challenges (station_id, title, description, tag, icon, start_date, end_date, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1);
+            """, (stations_map[s_slug], title, desc, tag, icon, start_str, end_str))
 
     conn.commit()
     conn.close()

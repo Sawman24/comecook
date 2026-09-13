@@ -1,34 +1,60 @@
 /* ==============================================================================
-   COOKED - Social Community Feed, Comments, Likes & Moderation
+   COOKED - Social Community Feed, Multi-Reactions, Polls, Mentions & Comments
    ============================================================================== */
 
 let currentFeedFilter = "all";
+let currentDietaryFilter = "";
 let openCommentsPostId = null;
+let postUploadedImageUrl = "";
+let isPollEnabledInModal = false;
 
-async function loadCommunityFeedView(filter = "all") {
+const REACTION_CONFIG = {
+  heart: { emoji: "❤️", name: "Love" },
+  chef_kiss: { emoji: "👨‍🍳", name: "Chef's Kiss" },
+  fire: { emoji: "🔥", name: "Fire" },
+  drool: { emoji: "🤤", name: "Delicious" },
+  genius: { emoji: "💡", name: "Genius Tip" }
+};
+
+async function loadCommunityFeedView(filter = "all", dietary = "") {
   currentFeedFilter = filter;
+  currentDietaryFilter = dietary;
   const container = document.getElementById("main-content-view");
   if (!container) return;
 
   container.innerHTML = `
     <!-- Feed Filter Bar -->
     <div class="feed-filter-bar">
-      <button class="filter-chip ${filter === 'all' ? 'active' : ''}" onclick="loadCommunityFeedView('all')">🔥 All Feed</button>
-      <button class="filter-chip ${filter === 'question' ? 'active' : ''}" onclick="loadCommunityFeedView('question')">❓ Kitchen Questions</button>
-      <button class="filter-chip ${filter === 'showcase' ? 'active' : ''}" onclick="loadCommunityFeedView('showcase')">📸 Dish Showcases</button>
-      <button class="filter-chip ${filter === 'following' ? 'active' : ''}" onclick="loadCommunityFeedView('following')">👥 Following</button>
+      <button class="filter-chip ${filter === 'all' && !dietary ? 'active' : ''}" onclick="loadCommunityFeedView('all', '')">🔥 All Feed</button>
+      <button class="filter-chip ${filter === 'for_you' ? 'active' : ''}" onclick="loadCommunityFeedView('for_you', '')">✨ For You</button>
+      <button class="filter-chip ${filter === 'following' ? 'active' : ''}" onclick="loadCommunityFeedView('following', '')">👥 Following</button>
+      <button class="filter-chip ${filter === 'trending' ? 'active' : ''}" onclick="loadCommunityFeedView('trending', '')">📈 Trending</button>
+      <button class="filter-chip ${filter === 'question' ? 'active' : ''}" onclick="loadCommunityFeedView('question', '')">❓ Kitchen Questions</button>
+      <button class="filter-chip ${filter === 'showcase' ? 'active' : ''}" onclick="loadCommunityFeedView('showcase', '')">📸 Showcases</button>
+    </div>
+
+    <!-- Dietary & Allergy Filter Bar -->
+    <div class="dietary-filter-bar">
+      <span class="dietary-label">Dietary:</span>
+      <button class="dietary-chip ${dietary === '' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', '')">All Diets</button>
+      <button class="dietary-chip ${dietary === 'vegetarian' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'vegetarian')">🌱 Vegetarian</button>
+      <button class="dietary-chip ${dietary === 'vegan' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'vegan')">🌿 Vegan</button>
+      <button class="dietary-chip ${dietary === 'gluten-free' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'gluten-free')">🌾 Gluten-Free</button>
+      <button class="dietary-chip ${dietary === 'keto' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'keto')">🥑 Keto</button>
+      <button class="dietary-chip ${dietary === 'quick' ? 'active' : ''}" onclick="loadCommunityFeedView('${filter}', 'quick')">⚡ Quick (&lt;30m)</button>
     </div>
 
     <!-- Create Post Card -->
     <div class="create-post-card">
       <div class="create-post-header">
         <img src="${escapeHtml(currentUser?.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
-        <input type="text" class="form-control" style="border-radius: var(--radius-full); cursor: pointer;" placeholder="Share a culinary tip, ask a cooking question, or showcase your latest dish..." onclick="openCreateModal()" readonly />
+        <input type="text" class="form-control" style="border-radius: var(--radius-full); cursor: pointer;" placeholder="Share a culinary tip, ask a cooking question, or start a poll..." onclick="openCreateModal()" readonly />
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--border-subtle);">
-        <div style="display: flex; gap: 0.75rem;">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('showcase')">📸 Photo</button>
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('question')">❓ Ask Question</button>
+          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post', null, true)">📊 Add Poll</button>
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post')">🍲 Attach Recipe</button>
         </div>
         <button class="btn btn-primary btn-sm" onclick="openCreateModal()">Post</button>
@@ -46,6 +72,7 @@ async function loadCommunityFeedView(filter = "all") {
 
 async function fetchAndRenderPosts(searchQuery = "") {
   let url = `/api/posts?type=${encodeURIComponent(currentFeedFilter)}`;
+  if (currentDietaryFilter) url += `&dietary=${encodeURIComponent(currentDietaryFilter)}`;
   if (searchQuery) url += `&q=${encodeURIComponent(searchQuery)}`;
 
   try {
@@ -81,6 +108,14 @@ function renderPostCard(post) {
     ? `<span class="badge badge-station" onclick="event.stopPropagation(); navigateToStation('${escapeHtml(post.station_slug)}')">${escapeHtml(post.station_icon || '🍳')} station/${escapeHtml(post.station_slug)}</span>`
     : "";
 
+  // Render author badges
+  const authorBadgesHtml = renderBadgesHtml(post.author_badges || []);
+
+  // Reactions summary
+  const reactions = post.reactions || { counts: {}, total: 0, user_reaction: null };
+  const userRx = reactions.user_reaction;
+  const currentEmoji = userRx && REACTION_CONFIG[userRx] ? REACTION_CONFIG[userRx].emoji : "❤️";
+
   return `
     <div class="post-card" id="post-card-${post.id}">
       <div class="post-header">
@@ -89,6 +124,8 @@ function renderPostCard(post) {
           <div>
             <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
               <span class="author-name" onclick="openUserProfile('${escapeHtml(post.username)}')">${escapeHtml(post.display_name || post.username)}</span>
+              ${post.is_verified ? '<span title="Verified Chef">⭐</span>' : ''}
+              ${authorBadgesHtml}
               ${typeBadge}
               ${stationBadge}
             </div>
@@ -96,12 +133,13 @@ function renderPostCard(post) {
           </div>
         </div>
         <div style="display: flex; gap: 0.35rem;">
+          <button class="btn-icon" title="Share via Whisper (DM)" onclick="openShareInDmModal(null, ${post.id})">💬</button>
           <button class="btn-icon" title="Report" onclick="openReportModal(${post.id}, null)">🚩</button>
           ${isOwner ? `<button class="btn-icon" style="color: var(--danger);" title="Delete" onclick="deletePost(${post.id})">🗑️</button>` : ''}
         </div>
       </div>
 
-      <div class="post-content">${escapeHtml(post.content)}</div>
+      <div class="post-content">${formatPostContent(post.content)}</div>
 
       ${post.image_url ? `
         <div class="post-image-wrap" onclick="openLightbox('${escapeHtml(post.image_url)}', 'Post by @${escapeHtml(post.username)}')">
@@ -120,20 +158,38 @@ function renderPostCard(post) {
         </div>
       ` : ''}
 
+      ${post.poll ? renderPollCard(post.poll) : ''}
+
+      <!-- Post Actions & Multi-Reaction Picker -->
       <div class="post-actions">
         <div class="action-group">
-          <button class="post-action-btn ${post.is_liked ? 'liked' : ''}" onclick="toggleLikePost(${post.id}, this)">
-            <svg style="width: 18px; height: 18px;" viewBox="0 0 24 24" fill="${post.is_liked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
-              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-            </svg>
-            <span class="like-count">${post.like_count || 0}</span>
-          </button>
+          <!-- Multi-Reaction Button with Popover -->
+          <div class="reaction-wrapper" id="rx-wrapper-${post.id}">
+            <button class="post-action-btn rx-main-btn ${userRx ? 'reacted' : ''}" onclick="toggleReactionPicker(${post.id})">
+              <span class="rx-btn-icon">${currentEmoji}</span>
+              <span class="rx-btn-label">${userRx ? REACTION_CONFIG[userRx].name : 'React'}</span>
+            </button>
+            <div class="reaction-popover" id="rx-popover-${post.id}">
+              <span class="rx-option ${userRx === 'heart' ? 'active' : ''}" title="Love ❤️" onclick="submitPostReaction(${post.id}, 'heart')">❤️</span>
+              <span class="rx-option ${userRx === 'chef_kiss' ? 'active' : ''}" title="Chef's Kiss 👨‍🍳" onclick="submitPostReaction(${post.id}, 'chef_kiss')">👨‍🍳</span>
+              <span class="rx-option ${userRx === 'fire' ? 'active' : ''}" title="Fire 🔥" onclick="submitPostReaction(${post.id}, 'fire')">🔥</span>
+              <span class="rx-option ${userRx === 'drool' ? 'active' : ''}" title="Delicious 🤤" onclick="submitPostReaction(${post.id}, 'drool')">🤤</span>
+              <span class="rx-option ${userRx === 'genius' ? 'active' : ''}" title="Genius Tip 💡" onclick="submitPostReaction(${post.id}, 'genius')">💡</span>
+            </div>
+          </div>
+
+          <!-- Comments Drawer Button -->
           <button class="post-action-btn" onclick="toggleCommentsDrawer(${post.id})">
             <svg style="width: 18px; height: 18px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
             </svg>
             <span>${post.comment_count || 0} Comments</span>
           </button>
+        </div>
+
+        <!-- Reaction Pills Count Summary -->
+        <div class="reaction-pills-row" id="rx-pills-${post.id}">
+          ${renderReactionPillsHtml(post.id, reactions)}
         </div>
       </div>
 
@@ -143,25 +199,158 @@ function renderPostCard(post) {
   `;
 }
 
-async function toggleLikePost(postId, btnEl) {
+function renderReactionPillsHtml(postId, reactions) {
+  if (!reactions || !reactions.counts) return "";
+  const pills = [];
+  for (const [key, count] of Object.entries(reactions.counts)) {
+    if (count > 0) {
+      const cfg = REACTION_CONFIG[key] || { emoji: "✨", name: key };
+      const isMyChoice = reactions.user_reaction === key;
+      pills.push(`
+        <button class="reaction-pill ${isMyChoice ? 'active' : ''}" onclick="submitPostReaction(${postId}, '${key}')" title="${cfg.name}">
+          <span>${cfg.emoji}</span> <span>${count}</span>
+        </button>
+      `);
+    }
+  }
+  return pills.join("");
+}
+
+function renderPollCard(poll) {
+  if (!poll) return "";
+  const hasVoted = poll.user_voted_index !== null;
+
+  return `
+    <div class="poll-card" id="poll-card-${poll.id}">
+      <div class="poll-question">📊 ${escapeHtml(poll.question)}</div>
+      <div class="poll-options-list">
+        ${poll.options.map(opt => {
+          const isSelected = poll.user_voted_index === opt.index;
+          return `
+            <div class="poll-option-row ${isSelected ? 'selected' : ''}" onclick="castPollVote(${poll.id}, ${opt.index})">
+              <div class="poll-progress-bar" style="width: ${hasVoted ? opt.percent : 0}%;"></div>
+              <div class="poll-option-content">
+                <span class="poll-option-text">${isSelected ? '✓ ' : ''}${escapeHtml(opt.text)}</span>
+                ${hasVoted ? `<span class="poll-option-pct">${opt.percent}% (${opt.votes})</span>` : ''}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <div class="poll-footer">
+        <span>${poll.total_votes} total vote${poll.total_votes === 1 ? '' : 's'}</span>
+        ${hasVoted ? '<span class="poll-voted-tag">Voted</span>' : '<span style="font-size: 0.78rem; color: var(--text-light);">Click an option to vote</span>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderBadgesHtml(badges) {
+  if (!badges || badges.length === 0) return "";
+  // Show top 2 badges to keep header neat
+  return badges.slice(0, 2).map(b => `
+    <span class="chef-badge-pill ${b.tier || 'silver'}" title="${escapeHtml(b.name)}: ${escapeHtml(b.description)}">
+      ${escapeHtml(b.icon)} ${escapeHtml(b.name)}
+    </span>
+  `).join("");
+}
+
+function formatPostContent(text) {
+  if (!text) return "";
+  let escaped = escapeHtml(text);
+  // Highlight @mentions
+  escaped = escaped.replace(/@([a-zA-Z0-9_]{3,30})/g, (match, username) => {
+    return `<span class="mention-tag" onclick="event.stopPropagation(); openUserProfile('${username}')">@${username}</span>`;
+  });
+  // Highlight #tags
+  escaped = escaped.replace(/#([a-zA-Z0-9_]{2,30})/g, (match, tag) => {
+    return `<span class="hashtag-tag" onclick="event.stopPropagation(); loadCommunityFeedView('all', '', '${tag}')">#${tag}</span>`;
+  });
+  return escaped;
+}
+
+/* ==============================================================================
+   REACTIONS & VOTING HANDLERS
+   ============================================================================== */
+
+function toggleReactionPicker(postId) {
+  const popover = document.getElementById(`rx-popover-${postId}`);
+  if (!popover) return;
+  const isShown = popover.classList.contains("show");
+  // Close all other popovers
+  document.querySelectorAll(".reaction-popover").forEach(p => p.classList.remove("show"));
+  if (!isShown) {
+    popover.classList.add("show");
+  }
+}
+
+// Close reaction popovers when clicking outside
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".reaction-wrapper")) {
+    document.querySelectorAll(".reaction-popover").forEach(p => p.classList.remove("show"));
+  }
+});
+
+async function submitPostReaction(postId, reactionKey) {
   if (!currentUser) {
     openAuthModal("login");
     return;
   }
-  const isLiked = btnEl.classList.contains("liked");
-  const method = isLiked ? "DELETE" : "POST";
+  document.querySelectorAll(".reaction-popover").forEach(p => p.classList.remove("show"));
+
   try {
-    const data = await apiRequest(`/api/posts/${postId}/like`, { method });
-    if (data.is_liked) {
-      btnEl.classList.add("liked");
-      btnEl.querySelector("svg").setAttribute("fill", "currentColor");
-    } else {
-      btnEl.classList.remove("liked");
-      btnEl.querySelector("svg").setAttribute("fill", "none");
+    const res = await apiRequest(`/api/posts/${postId}/react`, {
+      method: "POST",
+      body: JSON.stringify({ reaction: reactionKey })
+    });
+
+    // Update Main React button
+    const wrapper = document.getElementById(`rx-wrapper-${postId}`);
+    if (wrapper) {
+      const btn = wrapper.querySelector(".rx-main-btn");
+      const icon = wrapper.querySelector(".rx-btn-icon");
+      const label = wrapper.querySelector(".rx-btn-label");
+
+      if (res.user_reaction && REACTION_CONFIG[res.user_reaction]) {
+        btn.classList.add("reacted");
+        icon.textContent = REACTION_CONFIG[res.user_reaction].emoji;
+        label.textContent = REACTION_CONFIG[res.user_reaction].name;
+      } else {
+        btn.classList.remove("reacted");
+        icon.textContent = "❤️";
+        label.textContent = "React";
+      }
     }
-    btnEl.querySelector(".like-count").textContent = data.like_count;
+
+    // Update Reaction Pills Row
+    const pillsRow = document.getElementById(`rx-pills-${postId}`);
+    if (pillsRow) {
+      pillsRow.innerHTML = renderReactionPillsHtml(postId, res.reactions);
+    }
   } catch (err) {
-    showToast("Error updating like: " + err.message, "error");
+    showToast("Error updating reaction: " + err.message, "error");
+  }
+}
+
+async function castPollVote(pollId, optionIndex) {
+  if (!currentUser) {
+    openAuthModal("login");
+    return;
+  }
+
+  try {
+    const res = await apiRequest(`/api/polls/${pollId}/vote`, {
+      method: "POST",
+      body: JSON.stringify({ option_index: optionIndex })
+    });
+
+    const pollEl = document.getElementById(`poll-card-${pollId}`);
+    if (pollEl && res.poll) {
+      pollEl.outerHTML = renderPollCard(res.poll);
+    }
+    showToast("Vote recorded!", "success");
+  } catch (err) {
+    showToast("Error voting: " + err.message, "error");
   }
 }
 
@@ -175,6 +364,10 @@ async function deletePost(postId) {
     showToast("Error deleting post: " + err.message, "error");
   }
 }
+
+/* ==============================================================================
+   COMMENTS & NESTED REPLIES
+   ============================================================================== */
 
 async function toggleCommentsDrawer(postId) {
   const container = document.getElementById(`comments-container-${postId}`);
@@ -203,17 +396,23 @@ function renderCommentsSection(postId, comments) {
   const commentsListHtml = comments.map(c => {
     const isOwner = currentUser && (currentUser.id === c.user_id || currentUser.is_admin === 1);
     const isReply = Boolean(c.parent_id);
+    const badgesHtml = renderBadgesHtml(c.author_badges || []);
+
     return `
       <div class="comment-item ${isReply ? 'reply' : ''}" id="comment-${c.id}">
         <img src="${escapeHtml(c.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" style="width: 28px; height: 28px;" />
         <div class="comment-bubble">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <span class="comment-author">@${escapeHtml(c.username)}</span>
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+              <span class="comment-author">@${escapeHtml(c.username)}</span>
+              ${c.is_verified ? '<span title="Verified Chef">⭐</span>' : ''}
+              ${badgesHtml}
+            </div>
             <span style="font-size: 0.72rem; color: var(--text-light);">${formatRelativeTime(c.created_at)}</span>
           </div>
           <div class="comment-text">
             ${c.reply_to_username ? `<b style="color: var(--primary);">@${escapeHtml(c.reply_to_username)}</b> ` : ''}
-            ${escapeHtml(c.comment)}
+            ${formatPostContent(c.comment)}
           </div>
           <div class="comment-meta">
             <span onclick="prepareCommentReply(${postId}, ${c.id}, '${escapeHtml(c.username)}')">Reply</span>
@@ -232,7 +431,8 @@ function renderCommentsSection(postId, comments) {
     <form class="comment-input-wrap" onsubmit="handleCommentSubmit(event, ${postId})">
       <input type="hidden" id="reply-parent-id-${postId}" value="" />
       <input type="hidden" id="reply-username-${postId}" value="" />
-      <input type="text" id="comment-input-${postId}" class="form-control" style="font-size: 0.85rem;" placeholder="Write a comment..." required />
+      <input type="text" id="comment-input-${postId}" class="form-control" style="font-size: 0.85rem;" placeholder="Write a comment... (Type @ to mention)" required oninput="handleMentionInput(this, 'comment-mention-popup-${postId}')" />
+      <div id="comment-mention-popup-${postId}" class="mention-autocomplete-popup" style="display: none;"></div>
       <button type="submit" class="btn btn-primary btn-sm">Post</button>
     </form>
   `;
@@ -276,7 +476,6 @@ async function handleCommentSubmit(e, postId) {
     parentIdInput.value = "";
     usernameInput.value = "";
     input.placeholder = "Write a comment...";
-    // Reload comments
     const data = await apiRequest(`/api/posts/${postId}/comments`);
     renderCommentsSection(postId, data.comments || []);
   } catch (err) {
@@ -296,12 +495,10 @@ async function deleteComment(commentId) {
 }
 
 /* ==============================================================================
-   CREATE POST MODAL WITH CLIENT-SIDE CANVAS DOWNSAMPLING
+   CREATE POST MODAL & POLL CREATOR
    ============================================================================== */
 
-let postUploadedImageUrl = "";
-
-function openCreateModal(defaultType = "post", defaultStationId = null) {
+function openCreateModal(defaultType = "post", defaultStationId = null, enablePoll = false) {
   if (!currentUser) {
     openAuthModal("login");
     return;
@@ -317,10 +514,17 @@ function openCreateModal(defaultType = "post", defaultStationId = null) {
   document.getElementById("post-image-preview-wrap").style.display = "none";
   document.getElementById("post-image-preview").src = "";
 
-  // Load user's recipes for attachment dropdown
-  loadUserRecipesDropdown();
+  isPollEnabledInModal = enablePoll;
+  const pollSection = document.getElementById("post-poll-builder-section");
+  if (pollSection) {
+    pollSection.style.display = enablePoll ? "block" : "none";
+    document.getElementById("poll-question-input").value = "";
+    document.getElementById("poll-option-1").value = "";
+    document.getElementById("poll-option-2").value = "";
+    document.getElementById("poll-option-3").value = "";
+  }
 
-  // Load kitchen stations dropdown
+  loadUserRecipesDropdown();
   loadStationsDropdown(defaultStationId);
 
   modal.classList.add("show");
@@ -329,6 +533,14 @@ function openCreateModal(defaultType = "post", defaultStationId = null) {
 function closeCreateModal() {
   const modal = document.getElementById("create-post-modal");
   if (modal) modal.classList.remove("show");
+}
+
+function togglePollBuilder() {
+  isPollEnabledInModal = !isPollEnabledInModal;
+  const pollSection = document.getElementById("post-poll-builder-section");
+  if (pollSection) {
+    pollSection.style.display = isPollEnabledInModal ? "block" : "none";
+  }
 }
 
 async function loadStationsDropdown(preselectedStationId = null) {
@@ -362,9 +574,6 @@ async function loadUserRecipesDropdown() {
   }
 }
 
-/**
- * Downsample image via HTML5 Canvas (max 1280x1280 JPEG) before uploading
- */
 async function handleImageFileSelected(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -373,12 +582,11 @@ async function handleImageFileSelected(e) {
   const wrap = document.getElementById("post-image-preview-wrap");
 
   try {
-    showToast("Downsampling image client-side for fast upload...", "info", 1500);
+    showToast("Optimizing dish photo client-side...", "info", 1500);
     const blob = await downsampleImageFile(file, 1280, 1280);
     preview.src = URL.createObjectURL(blob);
     wrap.style.display = "block";
 
-    // Upload to server
     const formData = new FormData();
     formData.append("image", blob, "upload.jpg");
 
@@ -388,7 +596,7 @@ async function handleImageFileSelected(e) {
     });
 
     postUploadedImageUrl = res.url;
-    showToast("Dish photo processed & uploaded!", "success");
+    showToast("Dish photo uploaded!", "success");
   } catch (err) {
     showToast("Upload failed: " + err.message, "error");
     wrap.style.display = "none";
@@ -449,6 +657,20 @@ async function handlePostCreateSubmit(e) {
     return;
   }
 
+  // Check attached poll
+  let pollPayload = null;
+  if (isPollEnabledInModal) {
+    const pq = (document.getElementById("poll-question-input")?.value || "").trim();
+    const opt1 = (document.getElementById("poll-option-1")?.value || "").trim();
+    const opt2 = (document.getElementById("poll-option-2")?.value || "").trim();
+    const opt3 = (document.getElementById("poll-option-3")?.value || "").trim();
+    const opts = [opt1, opt2, opt3].filter(Boolean);
+
+    if (pq && opts.length >= 2) {
+      pollPayload = { question: pq, options: opts };
+    }
+  }
+
   try {
     await apiRequest("/api/posts", {
       method: "POST",
@@ -457,7 +679,8 @@ async function handlePostCreateSubmit(e) {
         post_type,
         station_id: station_id ? parseInt(station_id) : null,
         recipe_id: recipe_id ? parseInt(recipe_id) : null,
-        image_url: postUploadedImageUrl
+        image_url: postUploadedImageUrl,
+        poll: pollPayload
       })
     });
 
@@ -472,6 +695,72 @@ async function handlePostCreateSubmit(e) {
   } catch (err) {
     showToast("Error creating post: " + err.message, "error");
   }
+}
+
+/* ==============================================================================
+   INTERACTIVE @MENTIONS AUTOCOMPLETE POPUP
+   ============================================================================== */
+
+let mentionSearchTimeout = null;
+
+function handleMentionInput(inputEl, popupId) {
+  const popup = document.getElementById(popupId);
+  if (!popup) return;
+
+  const val = inputEl.value;
+  const cursor = inputEl.selectionStart;
+  const textBefore = val.slice(0, cursor);
+  const match = textBefore.match(/@([a-zA-Z0-9_]{1,20})$/);
+
+  if (!match) {
+    popup.style.display = "none";
+    return;
+  }
+
+  const query = match[1];
+  clearTimeout(mentionSearchTimeout);
+  mentionSearchTimeout = setTimeout(async () => {
+    try {
+      const data = await apiRequest(`/api/users?q=${encodeURIComponent(query)}`);
+      const users = (data.users || []).slice(0, 5);
+
+      if (users.length === 0) {
+        popup.style.display = "none";
+        return;
+      }
+
+      popup.innerHTML = users.map(u => `
+        <div class="mention-item" onclick="insertMention('${escapeHtml(u.username)}', '${inputEl.id}', '${popupId}')">
+          <img src="${escapeHtml(u.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" style="width: 22px; height: 22px;" />
+          <div>
+            <span style="font-weight: 700; font-size: 0.85rem;">@${escapeHtml(u.username)}</span>
+            <span style="font-size: 0.75rem; color: var(--text-light); margin-left: 0.35rem;">${escapeHtml(u.display_name)}</span>
+          </div>
+        </div>
+      `).join("");
+      popup.style.display = "block";
+    } catch (e) {
+      popup.style.display = "none";
+    }
+  }, 200);
+}
+
+function insertMention(username, inputId, popupId) {
+  const input = document.getElementById(inputId);
+  const popup = document.getElementById(popupId);
+  if (!input) return;
+
+  const val = input.value;
+  const cursor = input.selectionStart;
+  const textBefore = val.slice(0, cursor);
+  const textAfter = val.slice(cursor);
+
+  const updatedBefore = textBefore.replace(/@([a-zA-Z0-9_]{1,20})$/, `@${username} `);
+  input.value = updatedBefore + textAfter;
+  input.focus();
+  input.setSelectionRange(updatedBefore.length, updatedBefore.length);
+
+  if (popup) popup.style.display = "none";
 }
 
 /* ==============================================================================

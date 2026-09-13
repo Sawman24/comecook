@@ -83,6 +83,217 @@ def create_notification(user_id: int, actor_id: int, notif_type: str, entity_typ
         app.logger.warning(f"Failed to create notification: {e}")
 
 
+def is_user_blocked(user1_id: int, user2_id: int, conn=None) -> bool:
+    """Check if either user has blocked the other."""
+    if not user1_id or not user2_id or user1_id == user2_id:
+        return False
+    close_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            close_conn = True
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id FROM user_blocks
+            WHERE (user_id = ? AND blocked_user_id = ?)
+               OR (user_id = ? AND blocked_user_id = ?);
+        """, (user1_id, user2_id, user2_id, user1_id))
+        blocked = bool(cursor.fetchone())
+        if close_conn:
+            conn.close()
+        return blocked
+    except Exception as e:
+        app.logger.warning(f"Error checking user block: {e}")
+        if close_conn:
+            conn.close()
+        return False
+
+
+def parse_and_notify_mentions(text: str, actor_id: int, entity_type: str, entity_id: int, message_template: str, conn=None):
+    """Extract @username mentions from text and dispatch in-app notifications."""
+    if not text:
+        return
+    usernames = set(re.findall(r'@([a-zA-Z0-9_]{3,30})', text))
+    if not usernames:
+        return
+
+    close_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            close_conn = True
+        cursor = conn.cursor()
+
+        for uname in usernames:
+            cursor.execute("SELECT id FROM users WHERE username = ? AND is_active = 1;", (uname,))
+            target = cursor.fetchone()
+            if target and target["id"] != actor_id:
+                # Ensure no blocking relationship exists
+                cursor.execute("""
+                    SELECT id FROM user_blocks
+                    WHERE (user_id = ? AND blocked_user_id = ?)
+                       OR (user_id = ? AND blocked_user_id = ?);
+                """, (target["id"], actor_id, actor_id, target["id"]))
+                if not cursor.fetchone():
+                    create_notification(
+                        user_id=target["id"],
+                        actor_id=actor_id,
+                        notif_type="mention",
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        message=message_template,
+                        conn=conn
+                    )
+        if conn:
+            conn.commit()
+        if close_conn:
+            conn.close()
+    except Exception as e:
+        app.logger.warning(f"Failed to parse and notify mentions: {e}")
+        if close_conn:
+            conn.close()
+
+
+def compute_user_badges(user_id: int, conn=None) -> list:
+    """Compute and return dynamic culinary achievement badges for a user."""
+    badges = []
+    close_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            close_conn = True
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id, username, is_admin, is_verified, created_at FROM users WHERE id = ?;", (user_id,))
+        u = cursor.fetchone()
+        if not u:
+            if close_conn:
+                conn.close()
+            return badges
+
+        if u["is_admin"] == 1:
+            badges.append({
+                "id": "admin",
+                "name": "Executive Chef",
+                "icon": "👑",
+                "description": "Cooked Platform Founder & Head Moderator",
+                "tier": "legendary"
+            })
+
+        if u["is_verified"] == 1:
+            badges.append({
+                "id": "verified",
+                "name": "Verified Chef",
+                "icon": "⭐",
+                "description": "Verified Culinary Professional & Creator",
+                "tier": "gold"
+            })
+
+        # Recipes count & stats
+        cursor.execute("SELECT COUNT(*) AS count FROM recipes WHERE user_id = ? AND is_public = 1;", (user_id,))
+        rec_count = cursor.fetchone()["count"]
+
+        if rec_count >= 10:
+            badges.append({
+                "id": "master_author",
+                "name": "Master Author",
+                "icon": "📚",
+                "description": "Published 10+ public recipes in the Recipe Box",
+                "tier": "gold"
+            })
+        elif rec_count >= 3:
+            badges.append({
+                "id": "sous_chef",
+                "name": "Sous Chef",
+                "icon": "👨‍🍳",
+                "description": "Active creator with 3+ published recipes",
+                "tier": "silver"
+            })
+
+        # Remake reviews & average rating
+        cursor.execute("""
+            SELECT COUNT(rv.id) AS review_count, AVG(rv.rating) AS avg_rating
+            FROM recipe_reviews rv
+            JOIN recipes r ON rv.recipe_id = r.id
+            WHERE r.user_id = ?;
+        """, (user_id,))
+        rev_row = cursor.fetchone()
+        if rev_row and rev_row["review_count"] and rev_row["review_count"] >= 2 and (rev_row["avg_rating"] or 0) >= 4.5:
+            badges.append({
+                "id": "top_rated",
+                "name": "Top Rated Author",
+                "icon": "🌟",
+                "description": f"Maintains a {rev_row['avg_rating']:.1f}★ rating across recipe remakes",
+                "tier": "gold"
+            })
+
+        # Specialized Station Leadership
+        cursor.execute("""
+            SELECT s.slug, s.name, sm.role
+            FROM station_members sm
+            JOIN stations s ON sm.station_id = s.id
+            WHERE sm.user_id = ? AND sm.role = 'lead_cook';
+        """, (user_id,))
+        lead_stations = cursor.fetchall()
+        for ls in lead_stations:
+            first_word = ls["name"].split()[0] if ls["name"] else "Station"
+            badges.append({
+                "id": f"lead_{ls['slug']}",
+                "name": f"Lead Cook ({first_word})",
+                "icon": "🥇",
+                "description": f"Lead Cook brigade leader in {ls['name']}",
+                "tier": "legendary"
+            })
+
+        # Culinary specialties from tags & cuisine
+        cursor.execute("""
+            SELECT COUNT(*) AS count FROM recipes
+            WHERE user_id = ? AND (tags_json LIKE '%Sourdough%' OR tags_json LIKE '%Baking%' OR tags_json LIKE '%Bread%');
+        """, (user_id,))
+        if cursor.fetchone()["count"] >= 2:
+            badges.append({
+                "id": "sourdough_master",
+                "name": "Sourdough Specialist",
+                "icon": "🥖",
+                "description": "Mastery of fermentation, high hydration doughs, and crumb craft",
+                "tier": "silver"
+            })
+
+        cursor.execute("""
+            SELECT COUNT(*) AS count FROM recipes
+            WHERE user_id = ? AND (tags_json LIKE '%Pasta%' OR cuisine LIKE '%Italian%');
+        """, (user_id,))
+        if cursor.fetchone()["count"] >= 2:
+            badges.append({
+                "id": "pasta_artisan",
+                "name": "Pasta Artisan",
+                "icon": "🍝",
+                "description": "Crafts handmade pasta shapes and traditional emulsions",
+                "tier": "silver"
+            })
+
+        cursor.execute("""
+            SELECT COUNT(*) AS count FROM recipes
+            WHERE user_id = ? AND (tags_json LIKE '%Steak%' OR tags_json LIKE '%Meat%' OR tags_json LIKE '%Grill%');
+        """, (user_id,))
+        if cursor.fetchone()["count"] >= 2:
+            badges.append({
+                "id": "cast_iron_master",
+                "name": "Cast Iron Master",
+                "icon": "🥩",
+                "description": "Expert in high-heat searing, cast iron basting, and meat cookery",
+                "tier": "silver"
+            })
+
+        if close_conn:
+            conn.close()
+    except Exception as e:
+        app.logger.warning(f"Error computing user badges: {e}")
+        if close_conn:
+            conn.close()
+    return badges
+
+
 # ==============================================================================
 # HEALTHCHECK & SYSTEM STATUS
 # ==============================================================================
@@ -504,7 +715,7 @@ def get_user_profile(username):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, username, display_name, avatar_url, bio, is_admin, created_at
+        SELECT id, username, display_name, avatar_url, bio, is_admin, is_verified, dietary_json, created_at
         FROM users
         WHERE username = ? AND is_active = 1;
     """, (username,))
@@ -527,9 +738,18 @@ def get_user_profile(username):
     following_count = cursor.fetchone()["count"]
 
     is_following = False
+    is_blocked_by_me = False
+    is_blocking_me = False
+
     if current_user:
         cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], target_id))
         is_following = bool(cursor.fetchone())
+
+        cursor.execute("SELECT id FROM user_blocks WHERE user_id = ? AND blocked_user_id = ?;", (current_user["id"], target_id))
+        is_blocked_by_me = bool(cursor.fetchone())
+
+        cursor.execute("SELECT id FROM user_blocks WHERE user_id = ? AND blocked_user_id = ?;", (target_id, current_user["id"]))
+        is_blocking_me = bool(cursor.fetchone())
 
     # Get recent public recipes
     cursor.execute("""
@@ -540,15 +760,30 @@ def get_user_profile(username):
     """, (target_id,))
     recent_recipes = [dict(r) for r in cursor.fetchall()]
 
+    badges = compute_user_badges(target_id, conn=conn)
+
+    dietary_prefs = []
+    try:
+        dietary_prefs = json.loads(profile_user["dietary_json"] or "[]")
+    except Exception:
+        dietary_prefs = []
+
+    user_dict = dict(profile_user)
+    user_dict["dietary_preferences"] = dietary_prefs
+    user_dict["badges"] = badges
+
     conn.close()
 
     return jsonify({
-        "user": dict(profile_user),
+        "user": user_dict,
+        "badges": badges,
         "stats": {
             "recipes_count": recipes_count,
             "followers_count": followers_count,
             "following_count": following_count,
-            "is_following": is_following
+            "is_following": is_following,
+            "is_blocked_by_me": is_blocked_by_me,
+            "is_blocking_me": is_blocking_me
         },
         "recipes": recent_recipes
     })
@@ -560,6 +795,7 @@ def update_profile():
     display_name = (data.get("display_name") or "").strip()
     avatar_url = (data.get("avatar_url") or "").strip()
     bio = (data.get("bio") or "").strip()
+    dietary_prefs = data.get("dietary_preferences")
 
     if not display_name:
         return jsonify({"error": "Validation Error", "message": "Display name cannot be empty"}), 400
@@ -573,13 +809,26 @@ def update_profile():
         if not is_clean:
             return jsonify({"error": "Validation Error", "message": err_msg}), 400
 
+    dietary_json = None
+    if dietary_prefs is not None and isinstance(dietary_prefs, list):
+        dietary_json = json.dumps([str(p).strip() for p in dietary_prefs if str(p).strip()])
+
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE users
-        SET display_name = ?, avatar_url = ?, bio = ?
-        WHERE id = ?;
-    """, (display_name, avatar_url, bio, g.current_user["id"]))
+
+    if dietary_json is not None:
+        cursor.execute("""
+            UPDATE users
+            SET display_name = ?, avatar_url = ?, bio = ?, dietary_json = ?
+            WHERE id = ?;
+        """, (display_name, avatar_url, bio, dietary_json, g.current_user["id"]))
+    else:
+        cursor.execute("""
+            UPDATE users
+            SET display_name = ?, avatar_url = ?, bio = ?
+            WHERE id = ?;
+        """, (display_name, avatar_url, bio, g.current_user["id"]))
+
     conn.commit()
     conn.close()
 
@@ -595,6 +844,11 @@ def toggle_follow(target_user_id):
     cursor = conn.cursor()
 
     if request.method == "POST":
+        # Check if target user has blocked current user or vice versa
+        if is_user_blocked(g.current_user["id"], target_user_id, conn=conn):
+            conn.close()
+            return jsonify({"error": "Forbidden", "message": "Unable to follow this user."}), 403
+
         cursor.execute("""
             INSERT OR IGNORE INTO friendships (user_id, friend_id)
             VALUES (?, ?);
@@ -620,6 +874,57 @@ def toggle_follow(target_user_id):
     conn.close()
     return jsonify({"success": True, "is_following": is_following})
 
+# ==============================================================================
+# USER BLOCKING & SAFETY ENDPOINTS
+# ==============================================================================
+
+@app.route("/api/users/<int:target_user_id>/block", methods=["POST", "DELETE"])
+@require_auth
+def toggle_block_user(target_user_id):
+    if target_user_id == g.current_user["id"]:
+        return jsonify({"error": "Bad Request", "message": "You cannot block yourself"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        cursor.execute("""
+            INSERT OR IGNORE INTO user_blocks (user_id, blocked_user_id)
+            VALUES (?, ?);
+        """, (g.current_user["id"], target_user_id))
+        # Also remove mutual friendship/follow
+        cursor.execute("DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?);",
+                       (g.current_user["id"], target_user_id, target_user_id, g.current_user["id"]))
+        is_blocked = True
+        msg = "User blocked. You will no longer see each other's posts, comments, or messages."
+    else:
+        cursor.execute("""
+            DELETE FROM user_blocks
+            WHERE user_id = ? AND blocked_user_id = ?;
+        """, (g.current_user["id"], target_user_id))
+        is_blocked = False
+        msg = "User unblocked."
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "is_blocked": is_blocked, "message": msg})
+
+@app.route("/api/users/blocked", methods=["GET"])
+@require_auth
+def get_blocked_users():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT u.id, u.username, u.display_name, u.avatar_url, b.created_at AS blocked_at
+        FROM user_blocks b
+        JOIN users u ON b.blocked_user_id = u.id
+        WHERE b.user_id = ?
+        ORDER BY b.created_at DESC;
+    """, (g.current_user["id"],))
+    blocked = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify({"success": True, "blocked_users": blocked})
+
 @app.route("/api/users/featured", methods=["GET"])
 def get_featured_chefs():
     current_user = get_authenticated_user()
@@ -627,7 +932,7 @@ def get_featured_chefs():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
+        SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.is_verified,
                (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count,
                (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
         FROM users u
@@ -637,10 +942,13 @@ def get_featured_chefs():
     """)
     chefs = [dict(r) for r in cursor.fetchall()]
 
-    if current_user:
-        for chef in chefs:
+    for chef in chefs:
+        chef["badges"] = compute_user_badges(chef["id"], conn=conn)
+        if current_user:
             cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], chef["id"]))
             chef["is_following"] = bool(cursor.fetchone())
+        else:
+            chef["is_following"] = False
 
     conn.close()
     return jsonify({"chefs": chefs})
@@ -918,6 +1226,8 @@ def get_recipe_detail(recipe_id):
         recipe_dict["is_saved"] = False
         recipe_dict["saved_folder"] = ""
         recipe_dict["user_review"] = None
+
+    recipe_dict["author_badges"] = compute_user_badges(recipe["user_id"], conn=conn)
 
     conn.close()
     return jsonify({"recipe": recipe_dict})
@@ -1524,12 +1834,17 @@ def get_station_leaderboard(slug):
 # COMMUNITY POSTS, LIKES, COMMENTS & MODERATION
 # ==============================================================================
 
+# ==============================================================================
+# COMMUNITY POSTS, MULTI-REACTIONS, POLLS & MENTIONS
+# ==============================================================================
+
 @app.route("/api/posts", methods=["GET"])
 def get_posts():
     current_user = get_authenticated_user()
-    post_type = request.args.get("type", "all")  # all, question, showcase, post, following
+    post_type = request.args.get("type", "all")  # all, for_you, following, trending, question, showcase, post
     station_slug = (request.args.get("station") or "").strip()
     query = (request.args.get("q") or "").strip()
+    dietary_filter = (request.args.get("dietary") or "").strip().lower()
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1537,6 +1852,18 @@ def get_posts():
     conditions = ["p.is_hidden = 0"]
     params = []
 
+    # Block filter: exclude posts by users who blocked current user or whom current user blocked
+    if current_user:
+        conditions.append("""
+            p.user_id NOT IN (
+                SELECT blocked_user_id FROM user_blocks WHERE user_id = ?
+                UNION
+                SELECT user_id FROM user_blocks WHERE blocked_user_id = ?
+            )
+        """)
+        params.extend([current_user["id"], current_user["id"]])
+
+    # Feed algorithms & type filtering
     if post_type in ["question", "showcase", "post"]:
         conditions.append("p.post_type = ?")
         params.append(post_type)
@@ -1546,6 +1873,9 @@ def get_posts():
             return jsonify({"posts": []})
         conditions.append("p.user_id IN (SELECT friend_id FROM friendships WHERE user_id = ?)")
         params.append(current_user["id"])
+    elif post_type == "for_you" and current_user:
+        # Prioritize posts from user's joined stations, followed chefs, and trending posts
+        pass  # We apply custom sorting below
 
     if station_slug:
         conditions.append("st.slug = ?")
@@ -1555,11 +1885,35 @@ def get_posts():
         conditions.append("(p.content LIKE ? OR r.title LIKE ? OR st.name LIKE ?)")
         params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
 
+    if dietary_filter:
+        tag_match = f"%{dietary_filter}%"
+        conditions.append("(r.tags_json LIKE ? OR p.content LIKE ?)")
+        params.extend([tag_match, tag_match])
+
     where_clause = "WHERE " + " AND ".join(conditions)
+
+    order_clause = "ORDER BY p.created_at DESC"
+    if post_type == "trending":
+        # Rank by total engagement in the last 14 days
+        order_clause = """
+            ORDER BY (
+                (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) * 2 +
+                (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = p.id) * 3 +
+                (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id AND c.is_hidden = 0) * 4
+            ) DESC, p.created_at DESC
+        """
+    elif post_type == "for_you" and current_user:
+        order_clause = f"""
+            ORDER BY (
+                CASE WHEN p.station_id IN (SELECT station_id FROM station_members WHERE user_id = {current_user['id']}) THEN 5 ELSE 0 END +
+                CASE WHEN p.user_id IN (SELECT friend_id FROM friendships WHERE user_id = {current_user['id']}) THEN 4 ELSE 0 END +
+                (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id)
+            ) DESC, p.created_at DESC
+        """
 
     sql = f"""
         SELECT p.id, p.user_id, p.content, p.image_url, p.recipe_id, p.station_id, p.post_type, p.created_at,
-               u.username, u.display_name, u.avatar_url,
+               u.username, u.display_name, u.avatar_url, u.is_verified,
                r.title AS recipe_title, r.image_url AS recipe_image, r.difficulty AS recipe_difficulty, r.prep_time_min + r.cook_time_min AS recipe_total_time,
                st.name AS station_name, st.slug AS station_slug, st.icon AS station_icon,
                (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS like_count,
@@ -1569,18 +1923,95 @@ def get_posts():
         LEFT JOIN recipes r ON p.recipe_id = r.id
         LEFT JOIN stations st ON p.station_id = st.id
         {where_clause}
-        ORDER BY p.created_at DESC
+        {order_clause}
         LIMIT 50;
     """
     cursor.execute(sql, params)
     posts = [dict(row) for row in cursor.fetchall()]
 
     for p in posts:
+        # 1. Author Badges
+        p["author_badges"] = compute_user_badges(p["user_id"], conn=conn)
+
+        # 2. Reactions Summary
+        cursor.execute("""
+            SELECT reaction, COUNT(*) AS count
+            FROM post_reactions
+            WHERE post_id = ?
+            GROUP BY reaction;
+        """, (p["id"],))
+        reaction_rows = cursor.fetchall()
+        rx_map = {"heart": 0, "chef_kiss": 0, "fire": 0, "drool": 0, "genius": 0}
+        total_rx = 0
+        for rx in reaction_rows:
+            if rx["reaction"] in rx_map:
+                rx_map[rx["reaction"]] = rx["count"]
+                total_rx += rx["count"]
+
+        user_reaction = None
         if current_user:
+            cursor.execute("SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
+            ur_row = cursor.fetchone()
+            if ur_row:
+                user_reaction = ur_row["reaction"]
+
             cursor.execute("SELECT id FROM post_likes WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
             p["is_liked"] = bool(cursor.fetchone())
         else:
             p["is_liked"] = False
+
+        p["reactions"] = {
+            "counts": rx_map,
+            "total": total_rx,
+            "user_reaction": user_reaction
+        }
+
+        # 3. Attached Poll
+        cursor.execute("SELECT id, question, options_json FROM post_polls WHERE post_id = ?;", (p["id"],))
+        poll_row = cursor.fetchone()
+        if poll_row:
+            try:
+                options_list = json.loads(poll_row["options_json"] or "[]")
+            except Exception:
+                options_list = []
+
+            # Aggregate votes
+            cursor.execute("""
+                SELECT option_index, COUNT(*) AS count
+                FROM poll_votes
+                WHERE poll_id = ?
+                GROUP BY option_index;
+            """, (poll_row["id"],))
+            vote_rows = {r["option_index"]: r["count"] for r in cursor.fetchall()}
+            total_votes = sum(vote_rows.values())
+
+            options_data = []
+            for idx, opt_text in enumerate(options_list):
+                votes = vote_rows.get(idx, 0)
+                pct = round((votes / total_votes * 100)) if total_votes > 0 else 0
+                options_data.append({
+                    "index": idx,
+                    "text": opt_text,
+                    "votes": votes,
+                    "percent": pct
+                })
+
+            user_voted_index = None
+            if current_user:
+                cursor.execute("SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?;", (poll_row["id"], current_user["id"]))
+                v_row = cursor.fetchone()
+                if v_row:
+                    user_voted_index = v_row["option_index"]
+
+            p["poll"] = {
+                "id": poll_row["id"],
+                "question": poll_row["question"],
+                "options": options_data,
+                "total_votes": total_votes,
+                "user_voted_index": user_voted_index
+            }
+        else:
+            p["poll"] = None
 
     conn.close()
     return jsonify({"posts": posts})
@@ -1602,6 +2033,7 @@ def create_post():
     post_type = data.get("post_type") or "post"
     station_id = data.get("station_id")
     station_slug = (data.get("station_slug") or "").strip()
+    poll_data = data.get("poll")
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1617,9 +2049,33 @@ def create_post():
         VALUES (?, ?, ?, ?, ?, ?);
     """, (g.current_user["id"], content, image_url, recipe_id, station_id, post_type))
     post_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
 
+    # Create attached poll if provided
+    if poll_data and isinstance(poll_data, dict):
+        q = (poll_data.get("question") or "").strip()
+        opts = [str(o).strip() for o in poll_data.get("options", []) if str(o).strip()]
+        if q and len(opts) >= 2:
+            is_q_clean, q_err = validate_clean_content(q, "Poll Question")
+            if is_q_clean:
+                cursor.execute("""
+                    INSERT INTO post_polls (post_id, question, options_json)
+                    VALUES (?, ?, ?);
+                """, (post_id, q, json.dumps(opts[:5])))
+
+    conn.commit()
+
+    # Mention extraction & notifications
+    snippet = content[:40]
+    parse_and_notify_mentions(
+        text=content,
+        actor_id=g.current_user["id"],
+        entity_type="post",
+        entity_id=post_id,
+        message_template=f"@{g.current_user['username']} mentioned you in a culinary post: \"{snippet}\"",
+        conn=conn
+    )
+
+    conn.close()
     return jsonify({"success": True, "message": "Post published", "post_id": post_id}), 201
 
 @app.route("/api/posts/<int:post_id>", methods=["DELETE"])
@@ -1628,7 +2084,6 @@ def delete_post(post_id):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Security Mitigation: IDOR Protection
     cursor.execute("SELECT id, user_id FROM community_posts WHERE id = ?;", (post_id,))
     existing = cursor.fetchone()
     if not existing:
@@ -1684,19 +2139,210 @@ def toggle_post_like(post_id):
 
     return jsonify({"success": True, "is_liked": is_liked, "like_count": count})
 
-@app.route("/api/posts/<int:post_id>/comments", methods=["GET"])
-def get_post_comments(post_id):
+# ==============================================================================
+# CULINARY MULTI-REACTIONS (heart, chef_kiss, fire, drool, genius)
+# ==============================================================================
+
+VALID_REACTIONS = {"heart", "chef_kiss", "fire", "drool", "genius"}
+REACTION_EMOJIS = {"heart": "❤️", "chef_kiss": "👨‍🍳", "fire": "🔥", "drool": "🤤", "genius": "💡"}
+
+@app.route("/api/posts/<int:post_id>/react", methods=["POST"])
+@require_auth
+def react_to_post(post_id):
+    data = request.get_json() or {}
+    reaction = (data.get("reaction") or "fire").strip().lower()
+
+    if reaction not in VALID_REACTIONS:
+        return jsonify({"error": "Validation Error", "message": f"Invalid reaction. Allowed: {list(VALID_REACTIONS)}"}), 400
+
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    cursor.execute("SELECT id, user_id, content FROM community_posts WHERE id = ?;", (post_id,))
+    p_row = cursor.fetchone()
+    if not p_row:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Post not found"}), 404
+
+    # Check existing reaction
+    cursor.execute("SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?;", (post_id, g.current_user["id"]))
+    existing = cursor.fetchone()
+
+    user_reaction = None
+    if existing and existing["reaction"] == reaction:
+        # Toggle off
+        cursor.execute("DELETE FROM post_reactions WHERE post_id = ? AND user_id = ?;", (post_id, g.current_user["id"]))
+        user_reaction = None
+    else:
+        # Insert or update
+        cursor.execute("""
+            INSERT OR REPLACE INTO post_reactions (post_id, user_id, reaction)
+            VALUES (?, ?, ?);
+        """, (post_id, g.current_user["id"], reaction))
+        user_reaction = reaction
+
+        # Send notification to author
+        if p_row["user_id"] != g.current_user["id"]:
+            emoji = REACTION_EMOJIS.get(reaction, "✨")
+            create_notification(
+                user_id=p_row["user_id"],
+                actor_id=g.current_user["id"],
+                notif_type="reaction",
+                entity_type="post",
+                entity_id=post_id,
+                message=f"@{g.current_user['username']} reacted {emoji} to your post: \"{p_row['content'][:35]}\"",
+                conn=conn
+            )
+
+    conn.commit()
+
+    # Aggregate counts
+    cursor.execute("SELECT reaction, COUNT(*) AS count FROM post_reactions WHERE post_id = ? GROUP BY reaction;", (post_id,))
+    counts = {r: 0 for r in VALID_REACTIONS}
+    for row in cursor.fetchall():
+        if row["reaction"] in counts:
+            counts[row["reaction"]] = row["count"]
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "user_reaction": user_reaction,
+        "reactions": {
+            "counts": counts,
+            "total": sum(counts.values()),
+            "user_reaction": user_reaction
+        }
+    })
+
+# ==============================================================================
+# COMMUNITY POLLS & VOTING
+# ==============================================================================
+
+@app.route("/api/polls/<int:poll_id>/vote", methods=["POST"])
+@require_auth
+def vote_poll(poll_id):
+    data = request.get_json() or {}
+    option_index = data.get("option_index")
+    if option_index is None or not isinstance(option_index, int) or option_index < 0:
+        return jsonify({"error": "Validation Error", "message": "Valid option_index required"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, post_id, question, options_json FROM post_polls WHERE id = ?;", (poll_id,))
+    poll = cursor.fetchone()
+    if not poll:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Poll not found"}), 404
+
+    try:
+        options = json.loads(poll["options_json"] or "[]")
+    except Exception:
+        options = []
+
+    if option_index >= len(options):
+        conn.close()
+        return jsonify({"error": "Validation Error", "message": "Invalid option selection"}), 400
+
+    # Cast or update vote
     cursor.execute("""
+        INSERT OR REPLACE INTO poll_votes (poll_id, user_id, option_index)
+        VALUES (?, ?, ?);
+    """, (poll_id, g.current_user["id"], option_index))
+    conn.commit()
+
+    # Calculate updated poll stats
+    cursor.execute("SELECT option_index, COUNT(*) AS count FROM poll_votes WHERE poll_id = ? GROUP BY option_index;", (poll_id,))
+    vote_rows = {r["option_index"]: r["count"] for r in cursor.fetchall()}
+    total_votes = sum(vote_rows.values())
+
+    options_data = []
+    for idx, opt_text in enumerate(options):
+        votes = vote_rows.get(idx, 0)
+        pct = round((votes / total_votes * 100)) if total_votes > 0 else 0
+        options_data.append({
+            "index": idx,
+            "text": opt_text,
+            "votes": votes,
+            "percent": pct
+        })
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "poll": {
+            "id": poll["id"],
+            "question": poll["question"],
+            "options": options_data,
+            "total_votes": total_votes,
+            "user_voted_index": option_index
+        }
+    })
+
+# ==============================================================================
+# STATION WEEKLY CHALLENGES
+# ==============================================================================
+
+@app.route("/api/stations/<slug>/challenges", methods=["GET"])
+def get_station_challenges(slug):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM stations WHERE slug = ?;", (slug,))
+    st = cursor.fetchone()
+    if not st:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Station not found"}), 404
+
+    cursor.execute("""
+        SELECT id, station_id, title, description, tag, icon, start_date, end_date, is_active, created_at
+        FROM station_challenges
+        WHERE station_id = ? AND is_active = 1
+        ORDER BY created_at DESC;
+    """, (st["id"],))
+    challenges = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+
+    return jsonify({"success": True, "challenges": challenges})
+
+# ==============================================================================
+# POST COMMENTS & NESTED REPLIES
+# ==============================================================================
+
+@app.route("/api/posts/<int:post_id>/comments", methods=["GET"])
+def get_post_comments(post_id):
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    conditions = ["c.post_id = ?", "c.is_hidden = 0"]
+    params = [post_id]
+
+    if current_user:
+        conditions.append("""
+            c.user_id NOT IN (
+                SELECT blocked_user_id FROM user_blocks WHERE user_id = ?
+                UNION
+                SELECT user_id FROM user_blocks WHERE blocked_user_id = ?
+            )
+        """)
+        params.extend([current_user["id"], current_user["id"]])
+
+    where_clause = "WHERE " + " AND ".join(conditions)
+
+    cursor.execute(f"""
         SELECT c.id, c.post_id, c.user_id, c.comment, c.parent_id, c.reply_to_username, c.created_at,
-               u.username, u.display_name, u.avatar_url
+               u.username, u.display_name, u.avatar_url, u.is_verified
         FROM post_comments c
         JOIN users u ON c.user_id = u.id
-        WHERE c.post_id = ? AND c.is_hidden = 0
+        {where_clause}
         ORDER BY c.created_at ASC;
-    """, (post_id,))
+    """, params)
     comments = [dict(row) for row in cursor.fetchall()]
+
+    for c in comments:
+        c["author_badges"] = compute_user_badges(c["user_id"], conn=conn)
+
     conn.close()
     return jsonify({"comments": comments})
 
@@ -1717,6 +2363,18 @@ def create_comment(post_id):
 
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    cursor.execute("SELECT user_id, content FROM community_posts WHERE id = ?;", (post_id,))
+    p_row = cursor.fetchone()
+    if not p_row:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Post not found"}), 404
+
+    # Ensure no blocking relationship exists with post owner
+    if is_user_blocked(g.current_user["id"], p_row["user_id"], conn=conn):
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "Unable to comment on this post."}), 403
+
     cursor.execute("""
         INSERT INTO post_comments (post_id, user_id, comment, parent_id, reply_to_username)
         VALUES (?, ?, ?, ?, ?);
@@ -1724,9 +2382,7 @@ def create_comment(post_id):
     comment_id = cursor.lastrowid
     conn.commit()
 
-    cursor.execute("SELECT user_id, content FROM community_posts WHERE id = ?;", (post_id,))
-    p_row = cursor.fetchone()
-    if p_row and p_row["user_id"] != g.current_user["id"]:
+    if p_row["user_id"] != g.current_user["id"]:
         create_notification(
             user_id=p_row["user_id"],
             actor_id=g.current_user["id"],
@@ -1738,6 +2394,17 @@ def create_comment(post_id):
         )
         conn.commit()
 
+    # Mention notifications in comments
+    parse_and_notify_mentions(
+        text=comment_text,
+        actor_id=g.current_user["id"],
+        entity_type="post",
+        entity_id=post_id,
+        message_template=f"@{g.current_user['username']} mentioned you in a comment: \"{comment_text[:40]}\"",
+        conn=conn
+    )
+
+    badges = compute_user_badges(g.current_user["id"], conn=conn)
     conn.close()
 
     return jsonify({
@@ -1753,6 +2420,7 @@ def create_comment(post_id):
             "username": g.current_user["username"],
             "display_name": g.current_user["display_name"],
             "avatar_url": g.current_user["avatar_url"],
+            "author_badges": badges,
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         }
     }), 201
@@ -1802,6 +2470,245 @@ def submit_report():
     conn.close()
 
     return jsonify({"success": True, "message": "Report submitted for moderation review"})
+
+# ==============================================================================
+# DIRECT MESSAGES & KITCHEN WHISPERS (1-on-1 DM ENGINE)
+# ==============================================================================
+
+@app.route("/api/messages/unread-count", methods=["GET"])
+@require_auth
+def get_unread_messages_count():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) AS count
+        FROM direct_messages
+        WHERE recipient_id = ? AND is_read = 0;
+    """, (g.current_user["id"],))
+    count = cursor.fetchone()["count"]
+    conn.close()
+    return jsonify({"success": True, "unread_count": count})
+
+@app.route("/api/messages/conversations", methods=["GET"])
+@require_auth
+def get_conversations():
+    my_id = g.current_user["id"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Get distinct conversational partner IDs (excluding blocked users)
+    cursor.execute("""
+        SELECT DISTINCT
+            CASE WHEN sender_id = ? THEN recipient_id ELSE sender_id END AS partner_id
+        FROM direct_messages
+        WHERE (sender_id = ? OR recipient_id = ?)
+          AND partner_id NOT IN (
+              SELECT blocked_user_id FROM user_blocks WHERE user_id = ?
+              UNION
+              SELECT user_id FROM user_blocks WHERE blocked_user_id = ?
+          );
+    """, (my_id, my_id, my_id, my_id, my_id))
+    partner_rows = cursor.fetchall()
+
+    conversations = []
+    for pr in partner_rows:
+        partner_id = pr["partner_id"]
+        cursor.execute("SELECT id, username, display_name, avatar_url, is_verified FROM users WHERE id = ?;", (partner_id,))
+        partner = cursor.fetchone()
+        if not partner:
+            continue
+
+        # Get latest message in thread
+        cursor.execute("""
+            SELECT id, sender_id, recipient_id, message, recipe_id, post_id, is_read, created_at
+            FROM direct_messages
+            WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?)
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1;
+        """, (my_id, partner_id, partner_id, my_id))
+        last_msg = cursor.fetchone()
+
+        # Get unread count from this partner
+        cursor.execute("""
+            SELECT COUNT(*) AS count
+            FROM direct_messages
+            WHERE sender_id = ? AND recipient_id = ? AND is_read = 0;
+        """, (partner_id, my_id))
+        unread_count = cursor.fetchone()["count"]
+
+        conversations.append({
+            "partner": dict(partner),
+            "partner_badges": compute_user_badges(partner_id, conn=conn),
+            "last_message": dict(last_msg) if last_msg else None,
+            "unread_count": unread_count
+        })
+
+    # Sort conversations by latest message timestamp DESC
+    conversations.sort(key=lambda c: (c["last_message"]["created_at"] if c["last_message"] else ""), reverse=True)
+
+    conn.close()
+    return jsonify({"success": True, "conversations": conversations})
+
+@app.route("/api/messages/<int:partner_id>", methods=["GET"])
+@require_auth
+def get_message_thread(partner_id):
+    my_id = g.current_user["id"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, username, display_name, avatar_url, is_verified FROM users WHERE id = ? AND is_active = 1;", (partner_id,))
+    partner = cursor.fetchone()
+    if not partner:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Chef not found"}), 404
+
+    # Check blocking
+    is_blocked = is_user_blocked(my_id, partner_id, conn=conn)
+
+    # Mark incoming messages from partner as read
+    cursor.execute("""
+        UPDATE direct_messages
+        SET is_read = 1
+        WHERE sender_id = ? AND recipient_id = ? AND is_read = 0;
+    """, (partner_id, my_id))
+    conn.commit()
+
+    # Query chronological messages
+    cursor.execute("""
+        SELECT dm.id, dm.sender_id, dm.recipient_id, dm.message, dm.recipe_id, dm.post_id, dm.is_read, dm.created_at,
+               r.title AS recipe_title, r.image_url AS recipe_image, r.difficulty AS recipe_difficulty,
+               p.content AS post_snippet, p.image_url AS post_image
+        FROM direct_messages dm
+        LEFT JOIN recipes r ON dm.recipe_id = r.id
+        LEFT JOIN community_posts p ON dm.post_id = p.id
+        WHERE (dm.sender_id = ? AND dm.recipient_id = ?) OR (dm.sender_id = ? AND dm.recipient_id = ?)
+        ORDER BY dm.created_at ASC, dm.id ASC
+        LIMIT 100;
+    """, (my_id, partner_id, partner_id, my_id))
+    messages = [dict(m) for m in cursor.fetchall()]
+
+    conn.close()
+    return jsonify({
+        "success": True,
+        "partner": dict(partner),
+        "is_blocked": is_blocked,
+        "messages": messages
+    })
+
+@app.route("/api/messages/<int:recipient_id>", methods=["POST"])
+@require_auth
+def send_direct_message(recipient_id):
+    if recipient_id == g.current_user["id"]:
+        return jsonify({"error": "Bad Request", "message": "You cannot send messages to yourself"}), 400
+
+    data = request.get_json() or {}
+    message_text = (data.get("message") or "").strip()
+    recipe_id = data.get("recipe_id")
+    post_id = data.get("post_id")
+
+    if not message_text and not recipe_id and not post_id:
+        return jsonify({"error": "Validation Error", "message": "Message cannot be empty"}), 400
+
+    if message_text:
+        is_clean, err_msg = validate_clean_content(message_text, "Message")
+        if not is_clean:
+            return jsonify({"error": "Validation Error", "message": err_msg}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, username FROM users WHERE id = ? AND is_active = 1;", (recipient_id,))
+    recipient = cursor.fetchone()
+    if not recipient:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Recipient chef not found"}), 404
+
+    # IDOR / Safety Check: Blocked validation
+    if is_user_blocked(g.current_user["id"], recipient_id, conn=conn):
+        conn.close()
+        return jsonify({"error": "Forbidden", "message": "Unable to send message to this chef."}), 403
+
+    cursor.execute("""
+        INSERT INTO direct_messages (sender_id, recipient_id, message, recipe_id, post_id)
+        VALUES (?, ?, ?, ?, ?);
+    """, (g.current_user["id"], recipient_id, message_text, recipe_id, post_id))
+    msg_id = cursor.lastrowid
+    conn.commit()
+
+    # Create notification for recipient
+    snippet = message_text[:40] if message_text else "shared culinary craft with you"
+    create_notification(
+        user_id=recipient_id,
+        actor_id=g.current_user["id"],
+        notif_type="dm",
+        entity_type="message",
+        entity_id=msg_id,
+        message=f"@{g.current_user['username']} sent you a whisper: \"{snippet}\"",
+        conn=conn
+    )
+    conn.commit()
+
+    # Hydrate attached recipe/post details if any
+    recipe_data = None
+    if recipe_id:
+        cursor.execute("SELECT id, title, image_url, difficulty FROM recipes WHERE id = ?;", (recipe_id,))
+        r_row = cursor.fetchone()
+        if r_row:
+            recipe_data = dict(r_row)
+
+    post_data = None
+    if post_id:
+        cursor.execute("SELECT id, content, image_url FROM community_posts WHERE id = ?;", (post_id,))
+        p_row = cursor.fetchone()
+        if p_row:
+            post_data = dict(p_row)
+
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "message": "Whisper sent!",
+        "dm": {
+            "id": msg_id,
+            "sender_id": g.current_user["id"],
+            "recipient_id": recipient_id,
+            "message": message_text,
+            "recipe_id": recipe_id,
+            "recipe_title": recipe_data["title"] if recipe_data else None,
+            "recipe_image": recipe_data["image_url"] if recipe_data else None,
+            "post_id": post_id,
+            "post_snippet": post_data["content"] if post_data else None,
+            "post_image": post_data["image_url"] if post_data else None,
+            "is_read": 0,
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        }
+    }), 201
+
+@app.route("/api/messages/read", methods=["POST"])
+@require_auth
+def mark_messages_read():
+    data = request.get_json() or {}
+    sender_id = data.get("sender_id")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    if sender_id:
+        cursor.execute("""
+            UPDATE direct_messages
+            SET is_read = 1
+            WHERE sender_id = ? AND recipient_id = ? AND is_read = 0;
+        """, (sender_id, g.current_user["id"]))
+    else:
+        cursor.execute("""
+            UPDATE direct_messages
+            SET is_read = 1
+            WHERE recipient_id = ? AND is_read = 0;
+        """, (g.current_user["id"],))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Messages marked as read"})
 
 
 # ==============================================================================

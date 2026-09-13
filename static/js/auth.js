@@ -34,6 +34,10 @@ function updateAuthUI() {
     initNotificationEngine();
   }
 
+  if (typeof initDirectMessaging === "function") {
+    initDirectMessaging();
+  }
+
   if (!container) return;
 
   if (currentUser) {
