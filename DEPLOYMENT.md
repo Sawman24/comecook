@@ -82,12 +82,36 @@ COOKED_SEED_DEMO=0
 
 ---
 
-## 4. Deploying with Docker Compose
+---
 
-### Option A: Production with Automatic HTTPS (Recommended)
+## 4. Deploying on Your Server
+
+### Option A: Deploy via Portainer (Recommended if using Portainer)
+
+1. Open your **Portainer Web UI** (`https://your-server-ip:9443`).
+2. Go to **Stacks** $\rightarrow$ **+ Add stack**.
+3. Name the stack: `comecook` (or `cooked`).
+4. Select **Repository**:
+   - **Repository URL**: `https://github.com/Sawman24/comecook.git`
+   - **Repository reference**: `refs/heads/main`
+   - **Compose path**: `docker-compose.yml` (or `docker-compose.prod.yml` if you want automated Caddy HTTPS on 80/443).
+5. Under **Environment variables**, click **+ Add environment variable** and set:
+   | Name | Example Value | Description |
+   | :--- | :--- | :--- |
+   | `SECRET_KEY` | `(64-char random hex key)` | Session encryption key |
+   | `HOST_PORT` | `8080` (or `3000`, `5055`) | **Change this to avoid port 5050 conflict on your host!** |
+   | `DOMAIN` | `comecook.app` | Your domain name |
+   | `COOKED_ENV` | `production` | Production mode |
+   | `SESSION_COOKIE_SECURE` | `1` | Enforce HTTPS cookies |
+   | `COOKED_SEED_DEMO` | `0` | 0 = clean database for real users |
+6. Click **Deploy the stack**!
+
+---
+
+### Option B: Production with Automatic HTTPS via CLI
 This uses Caddy alongside Cooked to automatically provision and renew valid **Let's Encrypt SSL Certificates** on ports 80 & 443 with zero configuration.
 
-1. Ensure your DNS A-Record (`cooked.yourdomain.com`) points to your server's public IP address.
+1. Ensure your DNS A-Record (`comecook.app`) points to your server's public IP address.
 2. Ensure firewall ports `80` and `443` are open (`sudo ufw allow 80/tcp && sudo ufw allow 443/tcp`).
 3. Start the containers:
 ```bash
@@ -100,13 +124,14 @@ docker compose -f docker-compose.prod.yml logs -f
 
 ---
 
-### Option B: Standalone Container (Behind Custom Nginx/Cloudflare)
-If you already run an existing Nginx / Traefik reverse proxy or Cloudflare tunnel on your host:
+### Option C: Standalone Container / Custom Port via CLI
+If you want to run on a custom host port (e.g. `8080` because `5050` is already taken):
 
 ```bash
-docker compose up -d --build
+HOST_PORT=8080 docker compose up -d --build
 ```
-Your app will be accessible locally on `http://127.0.0.1:5050` with healthcheck endpoint at `http://127.0.0.1:5050/api/health`.
+Your app will be accessible at `http://YOUR_SERVER_IP:8080`.
+
 
 ---
 
