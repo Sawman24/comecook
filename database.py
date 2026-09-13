@@ -271,9 +271,10 @@ def seed_stations_if_empty():
             "pasta-craft",
             "Semolina shapes, sfoglina techniques, rolling pin mastery, extruded pasta, and regional Italian sauces.",
             "🍝",
-            "https://images.unsplash.com/photo-1621996346565-e3d5d628169b?w=1200&auto=format&fit=crop&q=80",
+            "https://images.unsplash.com/photo-1551183053-bf91a1d81141?w=1200&auto=format&fit=crop&q=80",
             "1. Always reserve starchy pasta water for emulsions.\n2. State flour ratio (Tipo 00 vs Semola rimacinata).\n3. Respect regional traditions while welcoming experimentation."
         ),
+
         (
             "Smoke, Cast Iron & Grill",
             "smoke-castiron",
@@ -446,9 +447,10 @@ def seed_data_if_empty(force=False):
         json.dumps(["Pasta", "Italian", "Classic", "Vegetarian", "QuickMeals"]),
         json.dumps(cacio_ingredients),
         json.dumps(cacio_steps),
-        "https://images.unsplash.com/photo-1621996346565-e3d5d628169b?w=800&auto=format&fit=crop&q=80",
+        "https://images.unsplash.com/photo-1551183053-bf91a1d81141?w=800&auto=format&fit=crop&q=80",
         1
     ))
+
     cacio_id = cursor.lastrowid
 
     # 2. Rustic Sourdough Boule
