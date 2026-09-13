@@ -28,19 +28,63 @@ document.addEventListener("DOMContentLoaded", async () => {
     navigateTo("feed");
   }
 
-  // Setup Global Search Input
+  // Setup Global Search Input & Instant Live Dropdown
   const searchInput = document.getElementById("global-search-input");
-  if (searchInput) {
-    searchInput.addEventListener("input", debounce((e) => {
+  const searchDropdown = document.getElementById("search-dropdown-results");
+
+  if (searchInput && searchDropdown) {
+    searchInput.addEventListener("input", debounce(async (e) => {
       const q = e.target.value.trim();
-      if (currentActiveView === "recipes") {
-        fetchAndRenderRecipes(q);
-      } else if (currentActiveView === "feed") {
-        fetchAndRenderPosts(q);
-      } else if (currentActiveView === "stations") {
-        fetchAndRenderStations(q);
+      if (!q || q.length < 2) {
+        searchDropdown.style.display = "none";
+        searchDropdown.innerHTML = "";
+        return;
       }
-    }, 300));
+
+      try {
+        const res = await apiRequest(`/api/search?q=${encodeURIComponent(q)}`);
+        renderGlobalSearchDropdown(res, q);
+      } catch (err) {
+        console.error("Global search error:", err);
+      }
+    }, 250));
+
+    // Handle Enter key on search input
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const q = searchInput.value.trim();
+        if (q) {
+          searchDropdown.style.display = "none";
+          if (currentActiveView === "recipes") {
+            fetchAndRenderRecipes(q);
+          } else if (currentActiveView === "feed") {
+            fetchAndRenderPosts(q);
+          } else if (currentActiveView === "stations") {
+            fetchAndRenderStations(q);
+          } else {
+            navigateTo("recipes");
+            setTimeout(() => fetchAndRenderRecipes(q), 100);
+          }
+        }
+      } else if (e.key === "Escape") {
+        searchDropdown.style.display = "none";
+      }
+    });
+
+    // Close search dropdown when clicking outside
+    document.addEventListener("click", (e) => {
+      if (!searchInput.contains(e.target) && !searchDropdown.contains(e.target)) {
+        searchDropdown.style.display = "none";
+      }
+    });
+
+    // Re-open dropdown on focus if input has text
+    searchInput.addEventListener("focus", () => {
+      if (searchDropdown.innerHTML.trim() && searchInput.value.trim().length >= 2) {
+        searchDropdown.style.display = "block";
+      }
+    });
   }
 });
 
@@ -254,3 +298,118 @@ function debounce(func, wait) {
     timeout = setTimeout(() => func.apply(this, args), wait);
   };
 }
+
+/* ==============================================================================
+   GLOBAL SEARCH RENDERER & ACTION HANDLER
+   ============================================================================== */
+
+function renderGlobalSearchDropdown(data, query) {
+  const container = document.getElementById("search-dropdown-results");
+  if (!container) return;
+
+  const recipes = data.recipes || [];
+  const chefs = data.chefs || [];
+  const stations = data.stations || [];
+  const posts = data.posts || [];
+
+  const totalResults = recipes.length + chefs.length + stations.length + posts.length;
+
+  if (totalResults === 0) {
+    container.innerHTML = `
+      <div class="search-empty-state">
+        <p>No results found for "<b>${escapeHtml(query)}</b>"</p>
+        <div style="margin-top: 0.35rem; font-size: 0.8rem; color: var(--text-light);">Try searching for recipes, dishes, ingredients, chefs, or stations</div>
+      </div>
+    `;
+    container.style.display = "block";
+    return;
+  }
+
+  let html = "";
+
+  // 1. Recipes Section
+  if (recipes.length > 0) {
+    html += `<div class="search-section-header">Recipes (${recipes.length})</div>`;
+    recipes.forEach(r => {
+      const timeStr = r.cook_time_min ? `${r.cook_time_min}m cook` : (r.prep_time_min ? `${r.prep_time_min}m prep` : "");
+      const meta = [r.cuisine, timeStr, `by ${r.display_name || r.username}`].filter(Boolean).join(" • ");
+      html += `
+        <div class="search-result-item" onclick="selectSearchResult('recipe', ${r.id})">
+          <img src="${escapeHtml(r.image_url || 'https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=100')}" class="search-result-thumb" alt="${escapeHtml(r.title)}" />
+          <div class="search-result-info">
+            <span class="search-result-title">${escapeHtml(r.title)}</span>
+            <span class="search-result-subtitle">${escapeHtml(meta)}</span>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  // 2. Chefs Section
+  if (chefs.length > 0) {
+    html += `<div class="search-section-header">Chefs (${chefs.length})</div>`;
+    chefs.forEach(c => {
+      html += `
+        <div class="search-result-item" onclick="selectSearchResult('chef', '${escapeHtml(c.username)}')">
+          <img src="${escapeHtml(c.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="search-result-thumb" style="border-radius: 50%;" alt="${escapeHtml(c.username)}" />
+          <div class="search-result-info">
+            <span class="search-result-title">${escapeHtml(c.display_name || c.username)}</span>
+            <span class="search-result-subtitle">@${escapeHtml(c.username)} • ${c.recipe_count} recipes • ${c.follower_count} followers</span>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  // 3. Stations Section
+  if (stations.length > 0) {
+    html += `<div class="search-section-header">Kitchen Stations (${stations.length})</div>`;
+    stations.forEach(s => {
+      html += `
+        <div class="search-result-item" onclick="selectSearchResult('station', '${escapeHtml(s.slug)}')">
+          <div class="search-result-icon">${escapeHtml(s.icon || '🍳')}</div>
+          <div class="search-result-info">
+            <span class="search-result-title">${escapeHtml(s.name)}</span>
+            <span class="search-result-subtitle">${s.member_count || 0} cooks joined</span>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  // 4. Community Posts Section
+  if (posts.length > 0) {
+    html += `<div class="search-section-header">Community Discussions (${posts.length})</div>`;
+    posts.forEach(p => {
+      const typeLabel = p.post_type === 'question' ? '❓ Question' : (p.post_type === 'showcase' ? '📸 Showcase' : '💬 Post');
+      html += `
+        <div class="search-result-item" onclick="selectSearchResult('feed', ${p.id})">
+          <img src="${escapeHtml(p.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="search-result-thumb" style="border-radius: 50%;" alt="${escapeHtml(p.username)}" />
+          <div class="search-result-info">
+            <span class="search-result-title">${escapeHtml(p.content.substring(0, 50))}${p.content.length > 50 ? '...' : ''}</span>
+            <span class="search-result-subtitle">${typeLabel} by @${escapeHtml(p.username)}</span>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  container.innerHTML = html;
+  container.style.display = "block";
+}
+
+function selectSearchResult(type, idOrSlug) {
+  const searchDropdown = document.getElementById("search-dropdown-results");
+  if (searchDropdown) searchDropdown.style.display = "none";
+
+  if (type === "recipe") {
+    viewRecipeDetail(idOrSlug);
+  } else if (type === "chef") {
+    openUserProfile(idOrSlug);
+  } else if (type === "station") {
+    navigateToStation(idOrSlug);
+  } else if (type === "feed") {
+    navigateTo("feed");
+  }
+}
+

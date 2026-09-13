@@ -240,5 +240,22 @@ class CookedTestCase(unittest.TestCase):
         self.assertEqual(res2["unit"], "g")
         self.assertEqual(res2["name"], "spaghetti")
 
+    def test_10_global_search_endpoint(self):
+        """Verify unified /api/search returns matching recipes, chefs, stations, and posts."""
+        # Empty query returns empty categories
+        empty_res = self.client.get("/api/search?q=")
+        self.assertEqual(empty_res.status_code, 200)
+        empty_data = empty_res.get_json()
+        self.assertEqual(len(empty_data["recipes"]), 0)
+
+        # Search for 'pasta' (seeded recipe and station)
+        search_res = self.client.get("/api/search?q=pasta")
+        self.assertEqual(search_res.status_code, 200)
+        data = search_res.get_json()
+        self.assertEqual(data["query"], "pasta")
+        self.assertTrue(len(data["recipes"]) > 0 or len(data["stations"]) > 0)
+        self.assertIn("chefs", data)
+        self.assertIn("posts", data)
+
 if __name__ == "__main__":
     unittest.main()

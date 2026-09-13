@@ -466,6 +466,84 @@ def get_featured_chefs():
 
 
 # ==============================================================================
+# GLOBAL UNIFIED SEARCH ENDPOINT
+# ==============================================================================
+
+@app.route("/api/search", methods=["GET"])
+def global_search():
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"query": "", "recipes": [], "chefs": [], "stations": [], "posts": []})
+
+    current_user = get_authenticated_user()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    search_param = f"%{query}%"
+
+    # 1. Search Recipes
+    cursor.execute("""
+        SELECT r.id, r.title, r.description, r.image_url, r.cuisine, r.difficulty, r.prep_time_min, r.cook_time_min,
+               u.username, u.display_name
+        FROM recipes r
+        JOIN users u ON r.user_id = u.id
+        WHERE (r.is_public = 1 OR (r.user_id = ?))
+          AND (r.title LIKE ? OR r.description LIKE ? OR r.cuisine LIKE ? OR r.ingredients_json LIKE ?)
+        ORDER BY r.id DESC
+        LIMIT 5;
+    """, (current_user["id"] if current_user else -1, search_param, search_param, search_param, search_param))
+    recipes = [dict(row) for row in cursor.fetchall()]
+
+    # 2. Search Chefs / Users
+    cursor.execute("""
+        SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio,
+               (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id AND r.is_public = 1) AS recipe_count,
+               (SELECT COUNT(*) FROM friendships f WHERE f.friend_id = u.id) AS follower_count
+        FROM users u
+        WHERE u.is_active = 1
+          AND (u.username LIKE ? OR u.display_name LIKE ? OR u.bio LIKE ?)
+        ORDER BY follower_count DESC, recipe_count DESC
+        LIMIT 4;
+    """, (search_param, search_param, search_param))
+    chefs = [dict(row) for row in cursor.fetchall()]
+
+    # 3. Search Stations
+    cursor.execute("""
+        SELECT s.id, s.name, s.slug, s.description, s.icon, s.banner_url, s.member_count
+        FROM stations s
+        WHERE s.name LIKE ? OR s.description LIKE ? OR s.slug LIKE ?
+        ORDER BY s.member_count DESC
+        LIMIT 4;
+    """, (search_param, search_param, search_param))
+    stations = [dict(row) for row in cursor.fetchall()]
+
+    # 4. Search Community Posts
+    cursor.execute("""
+        SELECT cp.id, cp.content, cp.image_url, cp.post_type, cp.created_at,
+               u.username, u.display_name, u.avatar_url,
+               s.name AS station_name, s.slug AS station_slug, s.icon AS station_icon,
+               r.title AS recipe_title
+        FROM community_posts cp
+        JOIN users u ON cp.user_id = u.id
+        LEFT JOIN stations s ON cp.station_id = s.id
+        LEFT JOIN recipes r ON cp.recipe_id = r.id
+        WHERE cp.is_hidden = 0
+          AND (cp.content LIKE ? OR r.title LIKE ?)
+        ORDER BY cp.id DESC
+        LIMIT 4;
+    """, (search_param, search_param))
+    posts = [dict(row) for row in cursor.fetchall()]
+
+    conn.close()
+    return jsonify({
+        "query": query,
+        "recipes": recipes,
+        "chefs": chefs,
+        "stations": stations,
+        "posts": posts
+    })
+
+
+# ==============================================================================
 # RECIPES & RECIPE BOX
 # ==============================================================================
 
