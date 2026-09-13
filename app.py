@@ -109,6 +109,98 @@ def is_user_blocked(user1_id: int, user2_id: int, conn=None) -> bool:
         return False
 
 
+def are_users_friends(user1_id: int, user2_id: int, conn=None) -> bool:
+    """
+    Two users are considered 'Friends' if:
+    1. They are mutual followers in `friendships` (user1 follows user2 AND user2 follows user1), OR
+    2. An explicit message request between them has been accepted in `message_requests`.
+    """
+    if not user1_id or not user2_id or user1_id == user2_id:
+        return False
+    close_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            close_conn = True
+        cursor = conn.cursor()
+
+        # 1. Check mutual following
+        cursor.execute("""
+            SELECT COUNT(*) AS count
+            FROM friendships
+            WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?);
+        """, (user1_id, user2_id, user2_id, user1_id))
+        if cursor.fetchone()["count"] >= 2:
+            return True
+
+        # 2. Check accepted message request
+        cursor.execute("""
+            SELECT id FROM message_requests
+            WHERE ((sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?))
+              AND status = 'accepted';
+        """, (user1_id, user2_id, user2_id, user1_id))
+        if cursor.fetchone():
+            return True
+
+        return False
+    except Exception as e:
+        app.logger.warning(f"Error checking are_users_friends: {e}")
+        return False
+    finally:
+        if close_conn and conn:
+            conn.close()
+
+
+def get_message_request_info(user1_id: int, user2_id: int, conn=None) -> dict:
+    """
+    Get message request status and details between user1 and user2.
+    """
+    default_info = {
+        "has_request": False,
+        "id": None,
+        "status": "none",
+        "sender_id": None,
+        "recipient_id": None,
+        "is_sender": False,
+        "is_recipient": False
+    }
+    if not user1_id or not user2_id or user1_id == user2_id:
+        return default_info
+    close_conn = False
+    try:
+        if conn is None:
+            conn = get_db_connection()
+            close_conn = True
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, sender_id, recipient_id, status
+            FROM message_requests
+            WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?);
+        """, (user1_id, user2_id, user2_id, user1_id))
+        row = cursor.fetchone()
+        if not row:
+            return default_info
+
+        status = row["status"]
+        s_id = row["sender_id"]
+        r_id = row["recipient_id"]
+        return {
+            "has_request": True,
+            "id": row["id"],
+            "status": status,
+            "sender_id": s_id,
+            "recipient_id": r_id,
+            "is_sender": (user1_id == s_id),
+            "is_recipient": (user1_id == r_id)
+        }
+    except Exception as e:
+        app.logger.warning(f"Error getting message request info: {e}")
+        return default_info
+    finally:
+        if close_conn and conn:
+            conn.close()
+
+
 def parse_and_notify_mentions(text: str, actor_id: int, entity_type: str, entity_id: int, message_template: str, conn=None):
     """Extract @username mentions from text and dispatch in-app notifications."""
     if not text:
@@ -689,6 +781,7 @@ def get_user_profile(username):
     is_following = False
     is_blocked_by_me = False
     is_blocking_me = False
+    is_friend = False
 
     if current_user:
         cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], target_id))
@@ -699,6 +792,8 @@ def get_user_profile(username):
 
         cursor.execute("SELECT id FROM user_blocks WHERE user_id = ? AND blocked_user_id = ?;", (target_id, current_user["id"]))
         is_blocking_me = bool(cursor.fetchone())
+
+        is_friend = are_users_friends(current_user["id"], target_id, conn=conn)
 
     # Get recent public recipes
     cursor.execute("""
@@ -731,6 +826,7 @@ def get_user_profile(username):
             "followers_count": followers_count,
             "following_count": following_count,
             "is_following": is_following,
+            "is_friend": is_friend,
             "is_blocked_by_me": is_blocked_by_me,
             "is_blocking_me": is_blocking_me
         },
@@ -2421,7 +2517,7 @@ def submit_report():
     return jsonify({"success": True, "message": "Report submitted for moderation review"})
 
 # ==============================================================================
-# DIRECT MESSAGES & KITCHEN WHISPERS (1-on-1 DM ENGINE)
+# DIRECT MESSAGES & KITCHEN WHISPERS (1-on-1 DM & REQUESTS ENGINE)
 # ==============================================================================
 
 @app.route("/api/messages/unread-count", methods=["GET"])
@@ -2435,13 +2531,27 @@ def get_unread_messages_count():
         WHERE recipient_id = ? AND is_read = 0;
     """, (g.current_user["id"],))
     count = cursor.fetchone()["count"]
+
+    # Count incoming pending message requests
+    cursor.execute("""
+        SELECT COUNT(*) AS count
+        FROM message_requests
+        WHERE recipient_id = ? AND status = 'pending';
+    """, (g.current_user["id"],))
+    requests_count = cursor.fetchone()["count"]
+
     conn.close()
-    return jsonify({"success": True, "unread_count": count})
+    return jsonify({
+        "success": True,
+        "unread_count": count,
+        "unread_requests_count": requests_count
+    })
 
 @app.route("/api/messages/conversations", methods=["GET"])
 @require_auth
 def get_conversations():
     my_id = g.current_user["id"]
+    tab = request.args.get("tab", "all").strip().lower()
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -2459,13 +2569,18 @@ def get_conversations():
     """, (my_id, my_id, my_id, my_id, my_id))
     partner_rows = cursor.fetchall()
 
-    conversations = []
+    primary_convos = []
+    request_convos = []
+
     for pr in partner_rows:
         partner_id = pr["partner_id"]
         cursor.execute("SELECT id, username, display_name, avatar_url, is_verified FROM users WHERE id = ?;", (partner_id,))
         partner = cursor.fetchone()
         if not partner:
             continue
+
+        is_friend = are_users_friends(my_id, partner_id, conn=conn)
+        req_info = get_message_request_info(my_id, partner_id, conn=conn)
 
         # Get latest message in thread
         cursor.execute("""
@@ -2485,18 +2600,37 @@ def get_conversations():
         """, (partner_id, my_id))
         unread_count = cursor.fetchone()["count"]
 
-        conversations.append({
+        item = {
             "partner": dict(partner),
             "partner_badges": compute_user_badges(partner_id, conn=conn),
             "last_message": dict(last_msg) if last_msg else None,
-            "unread_count": unread_count
-        })
+            "unread_count": unread_count,
+            "is_friend": is_friend,
+            "is_request": (not is_friend and req_info.get("status") == "pending"),
+            "request_info": req_info
+        }
+
+        if is_friend or req_info.get("status") == "accepted":
+            primary_convos.append(item)
+        elif req_info.get("status") == "pending":
+            request_convos.append(item)
+        else:
+            primary_convos.append(item)
 
     # Sort conversations by latest message timestamp DESC
-    conversations.sort(key=lambda c: (c["last_message"]["created_at"] if c["last_message"] else ""), reverse=True)
+    primary_convos.sort(key=lambda c: (c["last_message"]["created_at"] if c["last_message"] else ""), reverse=True)
+    request_convos.sort(key=lambda c: (c["last_message"]["created_at"] if c["last_message"] else ""), reverse=True)
+
+    pending_incoming_count = len([c for c in request_convos if c.get("request_info", {}).get("is_recipient")])
 
     conn.close()
-    return jsonify({"success": True, "conversations": conversations})
+    return jsonify({
+        "success": True,
+        "primary": primary_convos,
+        "requests": request_convos,
+        "conversations": primary_convos if tab == "primary" else (request_convos if tab == "requests" else primary_convos + request_convos),
+        "requests_count": pending_incoming_count
+    })
 
 @app.route("/api/messages/<int:partner_id>", methods=["GET"])
 @require_auth
@@ -2511,8 +2645,10 @@ def get_message_thread(partner_id):
         conn.close()
         return jsonify({"error": "Not Found", "message": "Chef not found"}), 404
 
-    # Check blocking
+    # Check blocking & friendship
     is_blocked = is_user_blocked(my_id, partner_id, conn=conn)
+    is_friend = are_users_friends(my_id, partner_id, conn=conn)
+    req_info = get_message_request_info(my_id, partner_id, conn=conn)
 
     # Mark incoming messages from partner as read
     cursor.execute("""
@@ -2541,6 +2677,11 @@ def get_message_thread(partner_id):
         "success": True,
         "partner": dict(partner),
         "is_blocked": is_blocked,
+        "is_friend": is_friend,
+        "request_info": req_info,
+        "is_pending_request": (not is_friend and req_info.get("status") == "pending"),
+        "is_request_recipient": bool(req_info.get("is_recipient") and req_info.get("status") == "pending"),
+        "is_request_sender": bool(req_info.get("is_sender") and req_info.get("status") == "pending"),
         "messages": messages
     })
 
@@ -2566,7 +2707,7 @@ def send_direct_message(recipient_id):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id, username FROM users WHERE id = ? AND is_active = 1;", (recipient_id,))
+    cursor.execute("SELECT id, username, display_name FROM users WHERE id = ? AND is_active = 1;", (recipient_id,))
     recipient = cursor.fetchone()
     if not recipient:
         conn.close()
@@ -2577,6 +2718,38 @@ def send_direct_message(recipient_id):
         conn.close()
         return jsonify({"error": "Forbidden", "message": "Unable to send message to this chef."}), 403
 
+    # Check friendship & message request rules
+    is_friend = are_users_friends(g.current_user["id"], recipient_id, conn=conn)
+    req_info = get_message_request_info(g.current_user["id"], recipient_id, conn=conn)
+
+    is_request = False
+    if not is_friend:
+        # If current user already sent a pending request that recipient hasn't accepted -> prevent spam
+        if req_info.get("status") == "pending" and req_info.get("is_sender"):
+            conn.close()
+            return jsonify({
+                "error": "Pending Request",
+                "message": f"You already have a pending message request with Chef @{recipient['username']}. Please wait for them to accept before sending more messages."
+            }), 400
+        elif req_info.get("status") == "pending" and req_info.get("is_recipient"):
+            # Recipient is replying to the pending request -> automatically accept!
+            cursor.execute("""
+                UPDATE message_requests
+                SET status = 'accepted', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?;
+            """, (req_info["id"],))
+            conn.commit()
+            is_friend = True
+        else:
+            # First message from non-friend -> create or update message_requests as pending
+            cursor.execute("""
+                INSERT INTO message_requests (sender_id, recipient_id, status)
+                VALUES (?, ?, 'pending')
+                ON CONFLICT(sender_id, recipient_id) DO UPDATE SET status = 'pending', updated_at = CURRENT_TIMESTAMP;
+            """, (g.current_user["id"], recipient_id))
+            conn.commit()
+            is_request = True
+
     cursor.execute("""
         INSERT INTO direct_messages (sender_id, recipient_id, message, recipe_id, post_id)
         VALUES (?, ?, ?, ?, ?);
@@ -2586,13 +2759,20 @@ def send_direct_message(recipient_id):
 
     # Create notification for recipient
     snippet = message_text[:40] if message_text else "shared culinary craft with you"
+    if is_request:
+        notif_msg = f"@{g.current_user['username']} sent you a message request: \"{snippet}\""
+        notif_type = "message_request"
+    else:
+        notif_msg = f"@{g.current_user['username']} sent you a whisper: \"{snippet}\""
+        notif_type = "dm"
+
     create_notification(
         user_id=recipient_id,
         actor_id=g.current_user["id"],
-        notif_type="dm",
+        notif_type=notif_type,
         entity_type="message",
         entity_id=msg_id,
-        message=f"@{g.current_user['username']} sent you a whisper: \"{snippet}\"",
+        message=notif_msg,
         conn=conn
     )
     conn.commit()
@@ -2616,7 +2796,8 @@ def send_direct_message(recipient_id):
 
     return jsonify({
         "success": True,
-        "message": "Whisper sent!",
+        "message": "Message request sent!" if is_request else "Whisper sent!",
+        "is_request": is_request,
         "dm": {
             "id": msg_id,
             "sender_id": g.current_user["id"],
@@ -2632,6 +2813,83 @@ def send_direct_message(recipient_id):
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         }
     }), 201
+
+@app.route("/api/messages/requests/<int:partner_id>/accept", methods=["POST"])
+@require_auth
+def accept_message_request(partner_id):
+    my_id = g.current_user["id"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, username FROM users WHERE id = ?;", (partner_id,))
+    partner = cursor.fetchone()
+    if not partner:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Chef not found"}), 404
+
+    cursor.execute("""
+        SELECT id, sender_id, recipient_id, status
+        FROM message_requests
+        WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?);
+    """, (partner_id, my_id, my_id, partner_id))
+    req = cursor.fetchone()
+
+    if req:
+        cursor.execute("""
+            UPDATE message_requests
+            SET status = 'accepted', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?;
+        """, (req["id"],))
+    else:
+        cursor.execute("""
+            INSERT INTO message_requests (sender_id, recipient_id, status)
+            VALUES (?, ?, 'accepted')
+            ON CONFLICT(sender_id, recipient_id) DO UPDATE SET status = 'accepted', updated_at = CURRENT_TIMESTAMP;
+        """, (partner_id, my_id))
+
+    # Mark all incoming messages from partner as read
+    cursor.execute("""
+        UPDATE direct_messages
+        SET is_read = 1
+        WHERE sender_id = ? AND recipient_id = ?;
+    """, (partner_id, my_id))
+
+    # Notify requester
+    create_notification(
+        user_id=partner_id,
+        actor_id=my_id,
+        notif_type="message_request_accepted",
+        entity_type="user",
+        entity_id=my_id,
+        message=f"@{g.current_user['username']} accepted your message request! You can now whisper freely.",
+        conn=conn
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": f"Message request from @{partner['username']} accepted."})
+
+@app.route("/api/messages/requests/<int:partner_id>/decline", methods=["POST"])
+@require_auth
+def decline_message_request(partner_id):
+    my_id = g.current_user["id"]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE message_requests
+        SET status = 'declined', updated_at = CURRENT_TIMESTAMP
+        WHERE (sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?);
+    """, (partner_id, my_id, my_id, partner_id))
+
+    # Delete unaccepted direct messages from that sender to keep inbox clean
+    cursor.execute("""
+        DELETE FROM direct_messages
+        WHERE sender_id = ? AND recipient_id = ?;
+    """, (partner_id, my_id))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Message request declined."})
 
 @app.route("/api/messages/read", methods=["POST"])
 @require_auth

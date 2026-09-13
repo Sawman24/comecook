@@ -45,6 +45,11 @@ class TestAdvancedSocialSuite(unittest.TestCase):
         # Get C2 profile to find ID
         c2_prof = c1.get("/api/users/whisperer2").get_json()["user"]
         c2_id = c2_prof["id"]
+        c1_id = c2.get("/api/users/whisperer1").get_json()["user"]["id"]
+
+        # C1 and C2 follow each other (friends)
+        c1.post(f"/api/users/{c2_id}/follow")
+        c2.post(f"/api/users/{c1_id}/follow")
 
         # C1 sends recipe to C2 via DM
         rec_res = c1.post("/api/recipes", json={

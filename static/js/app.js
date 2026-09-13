@@ -289,7 +289,7 @@ async function openUserProfile(username) {
                     ${stats.is_following ? 'Following' : '+ Follow Chef'}
                   </button>
                   <button class="btn btn-secondary btn-sm" onclick="launchDirectMessageWithUser(${user.id}, '${escapeHtml(user.username)}')">
-                    💬 Whisper
+                    ${stats.is_friend ? '💬 Whisper' : '✉️ Request Whisper'}
                   </button>
                   <button class="btn btn-outline btn-sm ${stats.is_blocked_by_me ? 'btn-danger' : ''}" style="font-size: 0.78rem;" onclick="toggleBlockChef(${user.id}, '${escapeHtml(user.username)}', ${!stats.is_blocked_by_me})">
                     ${stats.is_blocked_by_me ? 'Unblock Chef' : '🚫 Block'}

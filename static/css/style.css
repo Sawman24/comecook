@@ -2964,6 +2964,100 @@ textarea.form-control {
   background: var(--bg-surface);
 }
 
+/* DM Tab Navigation */
+.dm-tabs-nav {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-surface);
+}
+
+.dm-tab-btn {
+  flex: 1;
+  padding: 0.65rem 0.5rem;
+  background: transparent;
+  border: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-bottom: 2px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.dm-tab-btn:hover {
+  color: var(--text-main);
+  background: var(--bg-hover);
+}
+
+.dm-tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.dm-tab-count {
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 0.1rem 0.35rem;
+  border-radius: 9999px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* Request Action Banners */
+.dm-request-banner {
+  padding: 0.85rem 1rem;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.dm-request-banner-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-main);
+  line-height: 1.4;
+}
+
+.dm-request-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.dm-pending-notice {
+  padding: 0.75rem 1rem;
+  background: rgba(245, 158, 11, 0.1);
+  border-top: 1px solid rgba(245, 158, 11, 0.3);
+  font-size: 0.8rem;
+  color: #d97706;
+  text-align: center;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.dm-friend-pill {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-full);
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
 .dm-search-bar-wrap {
   padding: 0.75rem;
   border-bottom: 1px solid var(--border-color);

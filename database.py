@@ -322,6 +322,19 @@ def init_db():
         UNIQUE (user_id, blocked_user_id)
     );
 
+    -- 23. MESSAGE REQUESTS (Non-friend messaging approvals)
+    CREATE TABLE IF NOT EXISTS message_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL,
+        recipient_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'pending', -- 'pending', 'accepted', 'declined'
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE CASCADE,
+        FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE,
+        UNIQUE (sender_id, recipient_id)
+    );
+
     -- PERFORMANCE INDEXES
     CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
@@ -350,6 +363,8 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes (poll_id, option_index);
     CREATE INDEX IF NOT EXISTS idx_station_challenges_station ON station_challenges (station_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_user_blocks ON user_blocks (user_id, blocked_user_id);
+    CREATE INDEX IF NOT EXISTS idx_message_requests_recipient ON message_requests (recipient_id, status);
+    CREATE INDEX IF NOT EXISTS idx_message_requests_sender ON message_requests (sender_id, status);
     """)
 
     # Dynamic migrations for existing databases
@@ -370,6 +385,25 @@ def init_db():
 
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN dietary_json TEXT DEFAULT '[]';")
+    except Exception:
+        pass
+
+    try:
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS message_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE,
+            UNIQUE (sender_id, recipient_id)
+        );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_requests_recipient ON message_requests (recipient_id, status);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_requests_sender ON message_requests (sender_id, status);")
     except Exception:
         pass
 

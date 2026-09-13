@@ -1,10 +1,12 @@
 /* ==============================================================================
-   COOKED - Direct Messaging & Kitchen Whispers Client Module
+   COOKED - Direct Messaging & Kitchen Whispers Client Module (With Message Requests)
    ============================================================================== */
 
 let currentDmPartnerId = null;
 let currentDmPartnerUsername = null;
 let dmPollingInterval = null;
+let currentDmTab = "primary"; // 'primary' | 'requests'
+let allDmConversationsData = { primary: [], requests: [] };
 let shareModalPayload = { recipe_id: null, post_id: null, defaultText: "" };
 
 /**
@@ -34,14 +36,26 @@ async function updateUnreadDmCount() {
   try {
     const data = await apiRequest("/api/messages/unread-count");
     const badge = document.getElementById("dm-badge");
-    if (!badge) return;
+    const reqBadge = document.getElementById("dm-requests-count-badge");
 
-    const count = data.unread_count || 0;
-    if (count > 0) {
-      badge.textContent = count > 99 ? "99+" : count;
-      badge.style.display = "flex";
-    } else {
-      badge.style.display = "none";
+    const count = (data.unread_count || 0) + (data.unread_requests_count || 0);
+    if (badge) {
+      if (count > 0) {
+        badge.textContent = count > 99 ? "99+" : count;
+        badge.style.display = "flex";
+      } else {
+        badge.style.display = "none";
+      }
+    }
+
+    if (reqBadge) {
+      const rCount = data.unread_requests_count || 0;
+      if (rCount > 0) {
+        reqBadge.textContent = rCount > 99 ? "99+" : rCount;
+        reqBadge.style.display = "inline-block";
+      } else {
+        reqBadge.style.display = "none";
+      }
     }
   } catch (e) {
     // Silent fail for polling
@@ -78,6 +92,22 @@ function closeMessagesDrawer() {
 }
 
 /**
+ * Switch DM Tab between Primary and Requests
+ */
+function switchDmTab(tab) {
+  currentDmTab = tab;
+  const primBtn = document.getElementById("dm-tab-btn-primary");
+  const reqBtn = document.getElementById("dm-tab-btn-requests");
+
+  if (primBtn && reqBtn) {
+    primBtn.classList.toggle("active", tab === "primary");
+    reqBtn.classList.toggle("active", tab === "requests");
+  }
+
+  renderConversationList();
+}
+
+/**
  * Load all conversation threads for current user
  */
 async function loadDmConversations() {
@@ -88,16 +118,71 @@ async function loadDmConversations() {
 
   try {
     const data = await apiRequest("/api/messages/conversations");
-    const convos = data.conversations || [];
+    allDmConversationsData = {
+      primary: data.primary || [],
+      requests: data.requests || []
+    };
 
-    if (convos.length === 0) {
+    const reqBadge = document.getElementById("dm-requests-count-badge");
+    if (reqBadge) {
+      const count = data.requests_count || allDmConversationsData.requests.length;
+      if (count > 0) {
+        reqBadge.textContent = count > 99 ? "99+" : count;
+        reqBadge.style.display = "inline-block";
+      } else {
+        reqBadge.style.display = "none";
+      }
+    }
+
+    renderConversationList();
+
+    const activeList = currentDmTab === "primary" ? allDmConversationsData.primary : allDmConversationsData.requests;
+    if (!currentDmPartnerId && activeList.length > 0) {
+      openDmThread(activeList[0].partner.id, activeList[0].partner.username);
+    }
+  } catch (err) {
+    listEl.innerHTML = `<div style="color: var(--danger); padding: 1rem; text-align: center;">Error loading chats: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/**
+ * Render conversation list based on active tab and search query
+ */
+function renderConversationList(searchQuery = "") {
+  const listEl = document.getElementById("dm-conversations-list");
+  if (!listEl) return;
+
+  let list = currentDmTab === "primary" ? (allDmConversationsData.primary || []) : (allDmConversationsData.requests || []);
+
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase();
+    list = list.filter(c =>
+      (c.partner.username && c.partner.username.toLowerCase().includes(q)) ||
+      (c.partner.display_name && c.partner.display_name.toLowerCase().includes(q)) ||
+      (c.last_message && c.last_message.message && c.last_message.message.toLowerCase().includes(q))
+    );
+  }
+
+  if (list.length === 0) {
+    if (currentDmTab === "requests") {
+      listEl.innerHTML = `
+        <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
+          <span style="font-size: 2rem; display: block; margin-bottom: 0.5rem;">📬</span>
+          <p style="font-weight: 600; font-size: 0.95rem;">No message requests</p>
+          <p style="font-size: 0.8rem; margin-top: 0.25rem;">Requests from non-friends will appear here for review.</p>
+        </div>
+      `;
+    } else {
       listEl.innerHTML = `
         <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted);">
           <span style="font-size: 2rem; display: block; margin-bottom: 0.5rem;">💬</span>
           <p style="font-weight: 600; font-size: 0.95rem;">No whispers yet</p>
-          <p style="font-size: 0.8rem; margin-top: 0.25rem;">Start a direct conversation with any chef or share a recipe!</p>
+          <p style="font-size: 0.8rem; margin-top: 0.25rem;">Whisper with mutual friends or send a request to any chef!</p>
         </div>
       `;
+    }
+
+    if (!currentDmPartnerId) {
       const activeEl = document.getElementById("dm-active-thread-container");
       if (activeEl) {
         activeEl.innerHTML = `
@@ -108,38 +193,38 @@ async function loadDmConversations() {
           </div>
         `;
       }
-      return;
     }
+    return;
+  }
 
-    listEl.innerHTML = convos.map(c => {
-      const p = c.partner;
-      const isSelected = currentDmPartnerId && currentDmPartnerId === p.id;
-      const lastSnippet = c.last_message ? (c.last_message.message || (c.last_message.recipe_id ? 'Shared a recipe' : 'Shared a post')) : 'No messages yet';
-      const timeStr = c.last_message ? formatRelativeTime(c.last_message.created_at) : '';
+  listEl.innerHTML = list.map(c => {
+    const p = c.partner;
+    const isSelected = currentDmPartnerId && currentDmPartnerId === p.id;
+    const lastSnippet = c.last_message ? (c.last_message.message || (c.last_message.recipe_id ? 'Shared a recipe' : 'Shared a post')) : 'No messages yet';
+    const timeStr = c.last_message ? formatRelativeTime(c.last_message.created_at) : '';
+    const isPendingOutgoing = c.request_info && c.request_info.status === 'pending' && c.request_info.is_sender;
 
-      return `
-        <div class="dm-convo-item ${isSelected ? 'active' : ''} ${c.unread_count > 0 ? 'unread' : ''}" onclick="openDmThread(${p.id}, '${escapeHtml(p.username)}')">
-          <img src="${escapeHtml(p.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
-          <div style="flex: 1; min-width: 0;">
-            <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.25rem;">
-              <span class="dm-convo-name">${escapeHtml(p.display_name || p.username)} ${p.is_verified ? '⭐' : ''}</span>
-              <span class="dm-convo-time">${timeStr}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.15rem;">
-              <span class="dm-convo-snippet">${escapeHtml(lastSnippet)}</span>
-              ${c.unread_count > 0 ? `<span class="dm-unread-pill">${c.unread_count}</span>` : ''}
-            </div>
+    return `
+      <div class="dm-convo-item ${isSelected ? 'active' : ''} ${c.unread_count > 0 ? 'unread' : ''}" onclick="openDmThread(${p.id}, '${escapeHtml(p.username)}')">
+        <img src="${escapeHtml(p.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
+        <div style="flex: 1; min-width: 0;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.25rem;">
+            <span class="dm-convo-name">${escapeHtml(p.display_name || p.username)} ${p.is_verified ? '⭐' : ''}</span>
+            <span class="dm-convo-time">${timeStr}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.15rem; gap: 0.25rem;">
+            <span class="dm-convo-snippet">${escapeHtml(lastSnippet)}</span>
+            ${isPendingOutgoing ? `<span class="badge badge-secondary" style="font-size: 0.6rem; flex-shrink: 0;">Pending</span>` : ''}
+            ${c.unread_count > 0 ? `<span class="dm-unread-pill">${c.unread_count}</span>` : ''}
           </div>
         </div>
-      `;
-    }).join("");
+      </div>
+    `;
+  }).join("");
+}
 
-    if (!currentDmPartnerId && convos.length > 0) {
-      openDmThread(convos[0].partner.id, convos[0].partner.username);
-    }
-  } catch (err) {
-    listEl.innerHTML = `<div style="color: var(--danger); padding: 1rem; text-align: center;">Error loading chats: ${escapeHtml(err.message)}</div>`;
-  }
+function filterDmConversations(query) {
+  renderConversationList(query);
 }
 
 /**
@@ -162,6 +247,10 @@ async function openDmThread(partnerId, partnerUsername) {
     const partner = data.partner;
     const messages = data.messages || [];
     const isBlocked = data.is_blocked;
+    const isFriend = data.is_friend;
+    const isPendingRequest = data.is_pending_request;
+    const isRequestRecipient = data.is_request_recipient;
+    const isRequestSender = data.is_request_sender;
 
     container.innerHTML = `
       <!-- Chat Header -->
@@ -169,12 +258,15 @@ async function openDmThread(partnerId, partnerUsername) {
         <div style="display: flex; align-items: center; gap: 0.65rem; cursor: pointer;" onclick="openUserProfile('${escapeHtml(partner.username)}')">
           <img src="${escapeHtml(partner.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
           <div>
-            <h4 style="font-size: 0.95rem; margin: 0; line-height: 1.2;">${escapeHtml(partner.display_name || partner.username)} ${partner.is_verified ? '⭐' : ''}</h4>
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+              <h4 style="font-size: 0.95rem; margin: 0; line-height: 1.2;">${escapeHtml(partner.display_name || partner.username)} ${partner.is_verified ? '⭐' : ''}</h4>
+              ${isFriend ? `<span class="dm-friend-pill">👥 Friend</span>` : (isPendingRequest ? `<span class="badge badge-secondary" style="font-size: 0.62rem;">✉️ Request</span>` : '')}
+            </div>
             <span style="font-size: 0.75rem; color: var(--text-light);">@${escapeHtml(partner.username)}</span>
           </div>
         </div>
         <div style="display: flex; gap: 0.5rem;">
-          <button class="btn btn-secondary btn-sm" onclick="openShareInDmModal(null, null, ${partner.id})" title="Attach Recipe">🍲 Attach Recipe</button>
+          ${isFriend ? `<button class="btn btn-secondary btn-sm" onclick="openShareInDmModal(null, null, ${partner.id})" title="Attach Recipe">🍲 Attach Recipe</button>` : ''}
         </div>
       </div>
 
@@ -183,22 +275,44 @@ async function openDmThread(partnerId, partnerUsername) {
         ${messages.length === 0 ? `
           <div style="text-align: center; padding: 3rem 1rem; color: var(--text-muted);">
             <p>No messages in this whisper thread yet.</p>
-            <p style="font-size: 0.8rem; margin-top: 0.25rem;">Say hello to Chef ${escapeHtml(partner.display_name)} or exchange cooking secrets!</p>
+            <p style="font-size: 0.8rem; margin-top: 0.25rem;">
+              ${isFriend ? `Say hello to Chef ${escapeHtml(partner.display_name)} or exchange cooking secrets!` : `Send a message request to start whispering with Chef ${escapeHtml(partner.display_name)}.`}
+            </p>
           </div>
         ` : messages.map(m => renderDmBubble(m)).join("")}
       </div>
 
-      <!-- Chat Input Area -->
+      <!-- Request Action Banner or Input Area -->
       ${isBlocked ? `
         <div style="padding: 1rem; background: var(--bg-surface); text-align: center; font-size: 0.85rem; color: var(--danger); border-top: 1px solid var(--border-color);">
           🚫 Messaging is disabled because one of you has blocked the other.
         </div>
+      ` : (isPendingRequest && isRequestRecipient ? `
+        <div class="dm-request-banner">
+          <div class="dm-request-banner-info">
+            <span>✉️</span>
+            <div>
+              <strong>Chef @${escapeHtml(partner.username)}</strong> sent you a message request.
+              <div style="font-size: 0.75rem; color: var(--text-muted);">Accept to start whispering and move this thread to Primary.</div>
+            </div>
+          </div>
+          <div class="dm-request-actions">
+            <button class="btn btn-outline btn-sm btn-danger" onclick="toggleBlockChef(${partner.id}, '${escapeHtml(partner.username)}', true)">🚫 Block</button>
+            <button class="btn btn-secondary btn-sm" onclick="declineMessageRequest(${partner.id})">✕ Decline</button>
+            <button class="btn btn-primary btn-sm" onclick="acceptMessageRequest(${partner.id})">✓ Accept Request</button>
+          </div>
+        </div>
+      ` : (isPendingRequest && isRequestSender ? `
+        <div class="dm-pending-notice">
+          <span>⏳</span>
+          <span>Message request sent. Waiting for Chef @${escapeHtml(partner.username)} to accept before you can send more messages.</span>
+        </div>
       ` : `
         <form class="dm-input-area" onsubmit="handleSendDmSubmit(event, ${partner.id})">
-          <input type="text" id="dm-message-input" class="form-control" placeholder="Whisper a culinary tip or message..." autocomplete="off" required />
-          <button type="submit" class="btn btn-primary btn-sm">Send</button>
+          <input type="text" id="dm-message-input" class="form-control" placeholder="${isFriend ? 'Whisper a culinary tip or message...' : 'Send a message request to Chef...'}" autocomplete="off" required />
+          <button type="submit" class="btn btn-primary btn-sm">${isFriend ? 'Send' : 'Send Request'}</button>
         </form>
-      `}
+      `))}
     `;
 
     const streamEl = document.getElementById("dm-messages-stream");
@@ -258,18 +372,63 @@ async function handleSendDmSubmit(e, partnerId) {
     });
     input.value = "";
     input.disabled = false;
-    input.focus();
 
-    const streamEl = document.getElementById("dm-messages-stream");
-    if (streamEl && res.dm) {
-      const bubbleWrap = document.createElement("div");
-      bubbleWrap.innerHTML = renderDmBubble(res.dm);
-      streamEl.appendChild(bubbleWrap.firstElementChild);
-      streamEl.scrollTop = streamEl.scrollHeight;
+    if (res.is_request) {
+      showToast("Message request sent!", "success");
+      await loadDmConversations();
+      await openDmThread(partnerId, currentDmPartnerUsername);
+    } else {
+      const streamEl = document.getElementById("dm-messages-stream");
+      if (streamEl && res.dm) {
+        const bubbleWrap = document.createElement("div");
+        bubbleWrap.innerHTML = renderDmBubble(res.dm);
+        streamEl.appendChild(bubbleWrap.firstElementChild);
+        streamEl.scrollTop = streamEl.scrollHeight;
+      }
+      input.focus();
     }
   } catch (err) {
     if (input) input.disabled = false;
-    showToast("Failed to send whisper: " + err.message, "error");
+    showToast("Failed to send message: " + err.message, "error");
+  }
+}
+
+/**
+ * Accept incoming message request
+ */
+async function acceptMessageRequest(partnerId) {
+  try {
+    const res = await apiRequest(`/api/messages/requests/${partnerId}/accept`, { method: "POST" });
+    showToast(res.message || "Message request accepted!", "success");
+    await loadDmConversations();
+    await openDmThread(partnerId, currentDmPartnerUsername);
+  } catch (err) {
+    showToast("Error accepting request: " + err.message, "error");
+  }
+}
+
+/**
+ * Decline incoming message request
+ */
+async function declineMessageRequest(partnerId) {
+  try {
+    const res = await apiRequest(`/api/messages/requests/${partnerId}/decline`, { method: "POST" });
+    showToast(res.message || "Message request declined.", "info");
+    currentDmPartnerId = null;
+    currentDmPartnerUsername = null;
+    await loadDmConversations();
+    const activeEl = document.getElementById("dm-active-thread-container");
+    if (activeEl) {
+      activeEl.innerHTML = `
+        <div class="dm-empty-thread-placeholder">
+          <span style="font-size: 3rem;">👨‍🍳</span>
+          <h3>Kitchen Whispers</h3>
+          <p>Request declined. Select another conversation.</p>
+        </div>
+      `;
+    }
+  } catch (err) {
+    showToast("Error declining request: " + err.message, "error");
   }
 }
 
@@ -338,7 +497,7 @@ async function handleShareInDmSubmit(e) {
   }
 
   try {
-    await apiRequest(`/api/messages/${recipientId}`, {
+    const res = await apiRequest(`/api/messages/${recipientId}`, {
       method: "POST",
       body: JSON.stringify({
         message: message || "Hey Chef, check this out!",
@@ -346,7 +505,7 @@ async function handleShareInDmSubmit(e) {
         post_id: shareModalPayload.post_id
       })
     });
-    showToast("Recipe shared via Kitchen Whisper!", "success");
+    showToast(res.message || "Shared via Kitchen Whisper!", "success");
     closeShareInDmModal();
     if (noteInput) noteInput.value = "";
     updateUnreadDmCount();
