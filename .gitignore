@@ -39,6 +39,9 @@ logs/
 .coverage
 htmlcov/
 .pytest_cache/
+stress_test*.py
+load_test*.py
+stress_results/
 
 # Agent App Data
 .gemini/
