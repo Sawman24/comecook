@@ -54,8 +54,8 @@ def validate_password_strength(password: str) -> tuple[bool, str | None]:
     return (True, None)
 
 def hash_password(password: str) -> str:
-    """Hash password using Werkzeug PBKDF2-HMAC-SHA256."""
-    return generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
+    """Hash password using Werkzeug PBKDF2-HMAC-SHA256 with calibrated work factor."""
+    return generate_password_hash(password, method="pbkdf2:sha256:80000", salt_length=16)
 
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify password against stored hash."""
@@ -65,10 +65,13 @@ def generate_session_token() -> str:
     """Generate 256-bit cryptographically secure pseudorandom token."""
     return secrets.token_urlsafe(32)
 
-def is_ip_rate_limited(ip_address: str) -> bool:
+def is_ip_rate_limited(ip_address: str, conn=None) -> bool:
     """Check if the IP has exceeded 5 failed login attempts in the last 5 minutes."""
     cutoff_time = (datetime.now(timezone.utc) - timedelta(minutes=LOCKOUT_WINDOW_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-    conn = get_db_connection()
+    should_close = False
+    if conn is None:
+        conn = get_db_connection()
+        should_close = True
     cursor = conn.cursor()
     cursor.execute("""
         SELECT COUNT(*) AS failed_count
@@ -76,22 +79,27 @@ def is_ip_rate_limited(ip_address: str) -> bool:
         WHERE ip_address = ? AND success = 0 AND attempt_time >= ?
     """, (ip_address, cutoff_time))
     row = cursor.fetchone()
-    conn.close()
+    if should_close:
+        conn.close()
     return bool(row and row["failed_count"] >= MAX_FAILED_ATTEMPTS)
 
-def record_login_attempt(ip_address: str, username: str, success: bool):
+def record_login_attempt(ip_address: str, username: str, success: bool, conn=None):
     """Log a login attempt for rate limiting & audit."""
-    conn = get_db_connection()
+    should_close = False
+    if conn is None:
+        conn = get_db_connection()
+        should_close = True
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO login_attempts (ip_address, username, attempt_time, success)
         VALUES (?, ?, CURRENT_TIMESTAMP, ?);
     """, (ip_address, username, 1 if success else 0))
-    # If successful login, clear past failed attempts for this IP to reset counter
     if success:
         cursor.execute("DELETE FROM login_attempts WHERE ip_address = ?;", (ip_address,))
     conn.commit()
-    conn.close()
+    if should_close:
+        conn.close()
+
 
 def create_user_session(user_id: int) -> str:
     """Generate and store a session token in the database."""

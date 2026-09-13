@@ -7,16 +7,22 @@ from werkzeug.security import generate_password_hash
 DB_PATH = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", os.path.join(os.path.dirname(__file__), "cooked.db")))
 
 def get_db_connection():
-    """Create a SQLite connection with foreign keys and WAL mode enabled."""
+    """Create a high-performance SQLite connection with WAL mode and memory tuning."""
     db_path = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", DB_PATH))
     parent_dir = os.path.dirname(os.path.abspath(db_path))
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+    conn.execute("PRAGMA cache_size = -64000;")
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA mmap_size = 268435456;")
     return conn
+
 
 
 def init_db():
@@ -366,12 +372,19 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts (ip_address, attempt_time);
     CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes (user_id);
     CREATE INDEX IF NOT EXISTS idx_recipes_public ON recipes (is_public);
+    CREATE INDEX IF NOT EXISTS idx_recipes_feed ON recipes (is_public, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_recipes_user_feed ON recipes (user_id, is_public, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_recipes_parent ON recipes (parent_recipe_id);
     CREATE INDEX IF NOT EXISTS idx_saved_recipes_user ON saved_recipes (user_id);
+    CREATE INDEX IF NOT EXISTS idx_saved_recipes_lookup ON saved_recipes (user_id, recipe_id);
     CREATE INDEX IF NOT EXISTS idx_stations_slug ON stations (slug);
     CREATE INDEX IF NOT EXISTS idx_station_members_station ON station_members (station_id);
     CREATE INDEX IF NOT EXISTS idx_station_members_user ON station_members (user_id);
+    CREATE INDEX IF NOT EXISTS idx_station_members_lookup ON station_members (station_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_community_posts_created ON community_posts (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_community_posts_user ON community_posts (user_id);
+    CREATE INDEX IF NOT EXISTS idx_community_posts_filter ON community_posts (post_type, is_hidden, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_community_posts_feed ON community_posts (is_hidden, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_post_likes_post ON post_likes (post_id);
     CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments (post_id, created_at ASC);
     CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships (user_id);
@@ -382,6 +395,7 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_direct_messages_users ON direct_messages (sender_id, recipient_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_direct_messages_inbox ON direct_messages (recipient_id, is_read, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions (post_id, reaction);
+    CREATE INDEX IF NOT EXISTS idx_post_reactions_lookup ON post_reactions (post_id, user_id, reaction);
     CREATE INDEX IF NOT EXISTS idx_post_polls_post ON post_polls (post_id);
     CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes (poll_id, option_index);
     CREATE INDEX IF NOT EXISTS idx_station_challenges_station ON station_challenges (station_id, is_active);
