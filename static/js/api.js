@@ -58,8 +58,8 @@ async function apiRequest(endpoint, options = {}) {
     defaultHeaders["Authorization"] = `Bearer ${storedToken}`;
   }
 
-  // If body is FormData (for uploads), delete Content-Type so browser sets boundary
-  if (options.body instanceof FormData) {
+  // If body is FormData or not provided, delete Content-Type
+  if (options.body instanceof FormData || !options.body) {
     delete defaultHeaders["Content-Type"];
   }
 

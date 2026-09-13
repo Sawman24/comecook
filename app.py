@@ -1065,7 +1065,7 @@ def toggle_save_recipe(recipe_id):
     cursor = conn.cursor()
 
     if request.method == "POST":
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         folder = data.get("folder_name") or "Favorites"
         notes = data.get("notes") or ""
         cursor.execute("""

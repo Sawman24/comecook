@@ -340,14 +340,21 @@ async function toggleSaveRecipe(recipeId, btnEl) {
     return;
   }
   try {
-    const isSaved = activeRecipeDetail?.is_saved || (btnEl && btnEl.textContent.includes('❤️'));
+    const isSaved = (activeRecipeDetail && activeRecipeDetail.id === recipeId) 
+      ? activeRecipeDetail.is_saved 
+      : (btnEl && btnEl.textContent.includes('❤️'));
     const method = isSaved ? "DELETE" : "POST";
-    const data = await apiRequest(`/api/recipes/${recipeId}/save`, { method });
+    const options = { method };
+    if (method === "POST") {
+      options.body = JSON.stringify({ folder_name: "Favorites" });
+    }
+    const data = await apiRequest(`/api/recipes/${recipeId}/save`, options);
     
     showToast(data.is_saved ? "Saved to your Recipe Box!" : "Removed from Recipe Box", "success");
     if (activeRecipeDetail && activeRecipeDetail.id === recipeId) {
       activeRecipeDetail.is_saved = data.is_saved;
       renderRecipeDetailView();
+      fetchAndRenderRecipeReviews(recipeId);
     } else {
       fetchAndRenderRecipes();
     }
@@ -689,12 +696,12 @@ function openReviewModal(recipeId, recipeTitle) {
     }
   }
 
-  modal.classList.add("active");
+  modal.classList.add("show");
 }
 
 function closeReviewModal() {
   const modal = document.getElementById("review-modal");
-  if (modal) modal.classList.remove("active");
+  if (modal) modal.classList.remove("show");
 }
 
 function setStarRating(rating) {
