@@ -19,7 +19,6 @@ def get_db_connection():
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA cache_size = -64000;")
     conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA mmap_size = 268435456;")
     return conn
 
 
