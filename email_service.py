@@ -72,29 +72,53 @@ def _send_smtp_payload(to_email: str, subject: str, html_body: str, text_body: s
         )
         return True
 
+    from email.utils import parseaddr, formatdate, make_msgid
+    import ssl
+    import sys
+    import traceback
+
+    # Envelope sender (MAIL FROM) MUST be a raw email address without display name
+    envelope_from = parseaddr(cfg["from_addr"])[1] or cfg["user"] or "cooked.noreply@gmail.com"
+
+    # Clean password (remove quotes/spaces commonly copied from Google App Passwords)
+    smtp_password = cfg["password"].strip().strip("'\"")
+    if "gmail.com" in cfg["host"].lower():
+        smtp_password = smtp_password.replace(" ", "")
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = cfg["from_addr"]
     msg["To"] = to_email
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="comecook.app")
 
     # Attach plain text and HTML versions
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
-        if cfg["use_ssl"]:
-            server = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=15)
-        else:
-            server = smtplib.SMTP(cfg["host"], cfg["port"], timeout=15)
-            if cfg["use_tls"]:
-                server.starttls()
+        print(f"[SMTP] Attempting connection to {cfg['host']}:{cfg['port']} for recipient {to_email}...", flush=True)
+        context = ssl.create_default_context()
 
-        server.login(cfg["user"], cfg["password"])
-        server.sendmail(cfg["from_addr"], [to_email], msg.as_string())
+        if cfg["use_ssl"]:
+            server = smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context, timeout=20)
+        else:
+            server = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
+            server.ehlo()
+            if cfg["use_tls"]:
+                server.starttls(context=context)
+                server.ehlo()
+
+        server.login(cfg["user"], smtp_password)
+        server.sendmail(envelope_from, [to_email], msg.as_string())
         server.quit()
+
+        print(f"[SMTP SUCCESS] Email delivered to {to_email}: '{subject}'", flush=True)
         logger.info(f"Email successfully sent to {to_email}: '{subject}'")
         return True
     except Exception as e:
+        err_trace = traceback.format_exc()
+        print(f"[SMTP ERROR] Failed to send email to {to_email}: {e}\n{err_trace}", file=sys.stderr, flush=True)
         logger.error(f"Failed to send email to {to_email}: {e}")
         return False
 
