@@ -1,6 +1,8 @@
 import sqlite3
 import os
 import json
+import threading
+import time
 from datetime import datetime, timezone, timedelta
 from werkzeug.security import generate_password_hash
 
@@ -56,8 +58,33 @@ def check_and_recover_db(db_path: str = None):
                 print(f"[DATABASE RECOVERY] Failed to move malformed database: {recover_err}")
 
 
+_CHECKPOINTER_STARTED = False
+_CHECKPOINTER_LOCK = threading.Lock()
+
+def start_wal_checkpointer():
+    """Start background daemon thread that periodically checkpoints SQLite WAL to keep WAL size tiny (< 500KB)."""
+    global _CHECKPOINTER_STARTED
+    with _CHECKPOINTER_LOCK:
+        if _CHECKPOINTER_STARTED:
+            return
+        _CHECKPOINTER_STARTED = True
+
+    def _loop():
+        while True:
+            time.sleep(3.0)
+            try:
+                conn = get_db_connection()
+                conn.execute("PRAGMA wal_checkpoint(PASSIVE);")
+                conn.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_loop, daemon=True, name="wal-checkpointer")
+    t.start()
+
+
 def init_db():
-    """Initialize database schema with tables and indexes, with automatic corruption recovery."""
+    """Initialize database schema with tables and indexes, with automatic corruption recovery and background checkpointing."""
     db_path = os.environ.get("COOKED_DB_PATH", os.environ.get("DATABASE_PATH", DB_PATH))
     check_and_recover_db(db_path)
     try:
@@ -76,6 +103,8 @@ def init_db():
             _run_init_db_schema()
         else:
             raise
+
+    start_wal_checkpointer()
 
 
 def _run_init_db_schema():

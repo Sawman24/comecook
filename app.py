@@ -269,6 +269,37 @@ def parse_and_notify_mentions(text: str, actor_id: int, entity_type: str, entity
             conn.close()
 
 
+# Thread-safe in-memory cache for high-frequency public listings (2s TTL)
+class MicroCache:
+    def __init__(self, ttl_sec=2.0):
+        self.ttl = ttl_sec
+        self.cache = {}
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        now = time.time()
+        with self.lock:
+            item = self.cache.get(key)
+            if item and item[1] > now:
+                return item[0]
+        return None
+
+    def set(self, key, value):
+        now = time.time()
+        with self.lock:
+            self.cache[key] = (value, now + self.ttl)
+
+    def invalidate(self, prefix=None):
+        with self.lock:
+            if prefix:
+                keys = [k for k in list(self.cache.keys()) if k.startswith(prefix)]
+                for k in keys:
+                    self.cache.pop(k, None)
+            else:
+                self.cache.clear()
+
+_FEED_CACHE = MicroCache(ttl_sec=2.0)
+
 # Thread-safe in-memory cache for user culinary badges (60s TTL)
 _BADGE_CACHE = {}  # user_id -> (badges_list, expire_timestamp)
 _BADGE_CACHE_LOCK = threading.Lock()
@@ -1308,6 +1339,11 @@ def get_blocked_users():
 @app.route("/api/users/featured", methods=["GET"])
 def get_featured_chefs():
     current_user = get_authenticated_user()
+    if not current_user:
+        cached = _FEED_CACHE.get("featured_chefs_public")
+        if cached is not None:
+            return jsonify(cached)
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -1322,16 +1358,22 @@ def get_featured_chefs():
     """)
     chefs = [dict(r) for r in cursor.fetchall()]
 
+    following_ids = set()
+    if current_user and chefs:
+        c_ids = [c["id"] for c in chefs]
+        c_placeholders = ",".join(["?"] * len(c_ids))
+        cursor.execute(f"SELECT friend_id FROM friendships WHERE user_id = ? AND friend_id IN ({c_placeholders});", [current_user["id"]] + c_ids)
+        following_ids = {r["friend_id"] for r in cursor.fetchall()}
+
     for chef in chefs:
         chef["badges"] = compute_user_badges(chef["id"], conn=conn)
-        if current_user:
-            cursor.execute("SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?;", (current_user["id"], chef["id"]))
-            chef["is_following"] = bool(cursor.fetchone())
-        else:
-            chef["is_following"] = False
+        chef["is_following"] = (chef["id"] in following_ids)
 
     conn.close()
-    return jsonify({"chefs": chefs})
+    result = {"chefs": chefs}
+    if not current_user:
+        _FEED_CACHE.set("featured_chefs_public", result)
+    return jsonify(result)
 
 
 @app.route("/api/users", methods=["GET"])
@@ -1480,6 +1522,13 @@ def get_recipes():
     difficulty = (request.args.get("difficulty") or "").strip()
     author_id = request.args.get("user_id")
 
+    # If unauthenticated public all recipes listing
+    is_public_all = not current_user and scope == "all" and not query and not cuisine and not tag and not difficulty and not author_id
+    if is_public_all:
+        cached = _FEED_CACHE.get("recipes_public_all")
+        if cached is not None:
+            return jsonify(cached)
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -1561,7 +1610,10 @@ def get_recipes():
         r["is_saved"] = (r["id"] in saved_ids)
 
     conn.close()
-    return jsonify({"recipes": recipes})
+    result = {"recipes": recipes}
+    if is_public_all:
+        _FEED_CACHE.set("recipes_public_all", result)
+    return jsonify(result)
 
 @app.route("/api/recipes/<int:recipe_id>", methods=["GET"])
 def get_recipe_detail(recipe_id):
@@ -1717,6 +1769,7 @@ def create_recipe():
 
     conn.commit()
     conn.close()
+    _FEED_CACHE.invalidate()
 
     return jsonify({"success": True, "message": "Recipe created", "recipe_id": recipe_id}), 201
 
@@ -2116,6 +2169,11 @@ def get_stations():
     current_user = get_authenticated_user()
     query = (request.args.get("q") or "").strip()
 
+    if not current_user and not query:
+        cached = _FEED_CACHE.get("stations_directory_public")
+        if cached is not None:
+            return jsonify(cached)
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -2149,7 +2207,10 @@ def get_stations():
             s["user_role"] = None
 
     conn.close()
-    return jsonify({"success": True, "stations": stations})
+    result = {"success": True, "stations": stations}
+    if not current_user and not query:
+        _FEED_CACHE.set("stations_directory_public", result)
+    return jsonify(result)
 
 @app.route("/api/stations/<slug>", methods=["GET"])
 def get_station_detail(slug):
@@ -2378,6 +2439,13 @@ def get_posts():
     query = (request.args.get("q") or "").strip()
     dietary_filter = (request.args.get("dietary") or "").strip().lower()
 
+    # If unauthenticated public feed request
+    is_public_feed = (not current_user and not query and not dietary_filter and not station_slug and post_type in ["all", "trending", "showcase", "question", "post"])
+    if is_public_feed:
+        cached = _FEED_CACHE.get(f"posts_feed_{post_type}")
+        if cached is not None:
+            return jsonify(cached)
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -2463,7 +2531,10 @@ def get_posts():
     posts = [dict(row) for row in cursor.fetchall()]
     posts = enrich_posts_batch(posts, current_user, conn)
     conn.close()
-    return jsonify({"posts": posts})
+    result = {"posts": posts}
+    if is_public_feed:
+        _FEED_CACHE.set(f"posts_feed_{post_type}", result)
+    return jsonify(result)
 
 @app.route("/api/posts", methods=["POST"])
 @require_auth
@@ -2528,6 +2599,7 @@ def create_post():
 
     conn.commit()
     conn.close()
+    _FEED_CACHE.invalidate()
     return jsonify({"success": True, "message": "Post published", "post_id": post_id}), 201
 
 @app.route("/api/posts/<int:post_id>", methods=["DELETE"])
@@ -2559,6 +2631,11 @@ def delete_post(post_id):
 @app.route("/api/hashtags/trending", methods=["GET"])
 def get_trending_hashtags():
     limit = min(int(request.args.get("limit", 10)), 30)
+    cache_key = f"trending_hashtags_{limit}"
+    cached = _FEED_CACHE.get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -2573,7 +2650,9 @@ def get_trending_hashtags():
     rows = cursor.fetchall()
     tags = [{"id": r["id"], "tag": r["tag"], "count": r["usage_count"], "recent_count": r["recent_count"]} for r in rows]
     conn.close()
-    return jsonify({"success": True, "trending_hashtags": tags, "trending": tags})
+    result = {"success": True, "trending_hashtags": tags, "trending": tags}
+    _FEED_CACHE.set(cache_key, result)
+    return jsonify(result)
 
 @app.route("/api/hashtags/<string:tag_name>", methods=["GET"])
 def get_hashtag_feed(tag_name):
