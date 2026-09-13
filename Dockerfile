@@ -45,6 +45,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT:-5050}/api/health || exit 1
 
 # Production WSGI Server entrypoint using Gunicorn with dynamic PORT & high concurrency
-CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 1 --threads 64 --keep-alive 5 --backlog 4096 --timeout 30 --access-logfile - --error-logfile - app:app"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-5050} --workers 3 --threads 32 --keep-alive 5 --backlog 4096 --timeout 30 --access-logfile - --error-logfile - app:app"]
 
 

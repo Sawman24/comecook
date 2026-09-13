@@ -2426,13 +2426,14 @@ def get_posts():
 
     order_clause = "ORDER BY p.created_at DESC"
     if post_type == "trending":
-        # Rank by total engagement in the last 14 days
+        # Rank by engagement on recent posts
+        conditions.append("p.created_at >= datetime('now', '-14 days')")
         order_clause = """
             ORDER BY (
                 (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) * 2 +
                 (SELECT COUNT(*) FROM post_reactions pr WHERE pr.post_id = p.id) * 3 +
                 (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id AND c.is_hidden = 0) * 4
-            ) DESC, p.created_at DESC
+            ) DESC, p.id DESC
         """
     elif post_type == "for_you" and current_user:
         order_clause = f"""
