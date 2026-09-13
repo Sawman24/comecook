@@ -133,7 +133,7 @@ function getWeekDays(offset = 0) {
   monday.setDate(now.getDate() - distanceToMonday + (offset * 7));
   monday.setHours(0, 0, 0, 0);
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = (typeof formatLocalDate === "function") ? formatLocalDate(new Date()) : new Date().toISOString().split("T")[0];
   const days = [];
   const dayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   const shortNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -141,7 +141,7 @@ function getWeekDays(offset = 0) {
   for (let i = 0; i < 7; i++) {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    const dateStr = d.toISOString().split("T")[0];
+    const dateStr = (typeof formatLocalDate === "function") ? formatLocalDate(d) : d.toISOString().split("T")[0];
     days.push({
       dateStr,
       dayName: dayNames[i],
@@ -406,7 +406,8 @@ function openAddPlanModal(dateStr, mealType) {
   const modal = document.getElementById("planner-modal");
   if (!modal) return;
 
-  document.getElementById("plan-date-input").value = dateStr || new Date().toISOString().split("T")[0];
+  const todayStr = (typeof formatLocalDate === "function") ? formatLocalDate(new Date()) : new Date().toISOString().split("T")[0];
+  document.getElementById("plan-date-input").value = dateStr || todayStr;
   document.getElementById("plan-meal-type-select").value = mealType || "dinner";
   document.getElementById("plan-custom-title").value = "";
   document.getElementById("plan-notes").value = "";

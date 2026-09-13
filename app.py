@@ -2564,6 +2564,68 @@ def get_hashtag_feed(tag_name):
         LIMIT 30;
     """, (tag_info["id"],))
     posts = [dict(p) for p in cursor.fetchall()]
+    current_user = get_authenticated_user()
+    for p in posts:
+        p["author_badges"] = compute_user_badges(p["user_id"], conn=conn)
+
+        # Reactions
+        cursor.execute("""
+            SELECT reaction, COUNT(*) AS count
+            FROM post_reactions
+            WHERE post_id = ?
+            GROUP BY reaction;
+        """, (p["id"],))
+        rx_rows = cursor.fetchall()
+        rx_map = {r["reaction"]: r["count"] for r in rx_rows}
+        total_rx = sum(rx_map.values())
+        user_reaction = None
+        if current_user:
+            cursor.execute("SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
+            ur_row = cursor.fetchone()
+            if ur_row:
+                user_reaction = ur_row["reaction"]
+            cursor.execute("SELECT id FROM post_likes WHERE post_id = ? AND user_id = ?;", (p["id"], current_user["id"]))
+            p["is_liked"] = bool(cursor.fetchone())
+        else:
+            p["is_liked"] = False
+
+        p["reactions"] = {
+            "counts": rx_map,
+            "total": total_rx,
+            "user_reaction": user_reaction
+        }
+
+        # Attached Poll
+        cursor.execute("SELECT id, question, options_json FROM post_polls WHERE post_id = ?;", (p["id"],))
+        poll_row = cursor.fetchone()
+        if poll_row:
+            try:
+                options_list = json.loads(poll_row["options_json"] or "[]")
+            except Exception:
+                options_list = []
+            cursor.execute("SELECT option_index, COUNT(*) AS count FROM poll_votes WHERE poll_id = ? GROUP BY option_index;", (poll_row["id"],))
+            vote_rows = {r["option_index"]: r["count"] for r in cursor.fetchall()}
+            total_votes = sum(vote_rows.values())
+            options_data = []
+            for idx, opt_text in enumerate(options_list):
+                votes = vote_rows.get(idx, 0)
+                pct = round((votes / total_votes * 100)) if total_votes > 0 else 0
+                options_data.append({"index": idx, "text": opt_text, "votes": votes, "percent": pct})
+            user_voted_index = None
+            if current_user:
+                cursor.execute("SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?;", (poll_row["id"], current_user["id"]))
+                v_row = cursor.fetchone()
+                if v_row:
+                    user_voted_index = v_row["option_index"]
+            p["poll"] = {
+                "id": poll_row["id"],
+                "question": poll_row["question"],
+                "options": options_data,
+                "total_votes": total_votes,
+                "user_voted_index": user_voted_index
+            }
+        else:
+            p["poll"] = None
 
     conn.close()
     return jsonify({

@@ -525,7 +525,7 @@ async function deleteRecipe(recipeId) {
 let editorIngredients = [];
 let editorSteps = [];
 
-function openRecipeEditorModal(recipeIdToEdit = null) {
+async function openRecipeEditorModal(recipeIdToEdit = null) {
   if (!currentUser) {
     openAuthModal("login");
     return;
@@ -534,27 +534,47 @@ function openRecipeEditorModal(recipeIdToEdit = null) {
   const modal = document.getElementById("recipe-editor-modal");
   if (!modal) return;
 
-  const isEdit = Boolean(recipeIdToEdit && activeRecipeDetail && activeRecipeDetail.id === recipeIdToEdit);
-  const r = isEdit ? activeRecipeDetail : {
-    id: null,
-    title: "",
-    description: "",
-    prep_time_min: 15,
-    cook_time_min: 25,
-    servings: 4,
-    difficulty: "Medium",
-    cuisine: "Global",
-    tags: ["HomeCooking"],
-    image_url: "",
-    ingredients: [
-      { name: "Extra Virgin Olive Oil", amount: "2", unit: "tbsp", category: "Pantry" },
-      { name: "Garlic Cloves (minced)", amount: "3", unit: "cloves", category: "Produce" }
-    ],
-    steps: [
-      { step_number: 1, instruction: "Prep all ingredients and preheat cooking vessel." },
-      { step_number: 2, instruction: "Combine and simmer until aromatic." }
-    ]
-  };
+  let isEdit = false;
+  let r = null;
+  if (recipeIdToEdit) {
+    if (activeRecipeDetail && activeRecipeDetail.id === recipeIdToEdit) {
+      r = activeRecipeDetail;
+      isEdit = true;
+    } else {
+      try {
+        const data = await apiRequest(`/api/recipes/${recipeIdToEdit}`);
+        r = data.recipe;
+        activeRecipeDetail = r;
+        isEdit = true;
+      } catch (err) {
+        showToast("Error loading recipe to edit: " + err.message, "error");
+        return;
+      }
+    }
+  }
+
+  if (!r) {
+    r = {
+      id: null,
+      title: "",
+      description: "",
+      prep_time_min: 15,
+      cook_time_min: 25,
+      servings: 4,
+      difficulty: "Medium",
+      cuisine: "Global",
+      tags: ["HomeCooking"],
+      image_url: "",
+      ingredients: [
+        { name: "Extra Virgin Olive Oil", amount: "2", unit: "tbsp", category: "Pantry" },
+        { name: "Garlic Cloves (minced)", amount: "3", unit: "cloves", category: "Produce" }
+      ],
+      steps: [
+        { step_number: 1, instruction: "Prep all ingredients and preheat cooking vessel." },
+        { step_number: 2, instruction: "Combine and simmer until aromatic." }
+      ]
+    };
+  }
 
   editorIngredients = JSON.parse(JSON.stringify(r.ingredients || []));
   editorSteps = JSON.parse(JSON.stringify(r.steps || []));

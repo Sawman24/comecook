@@ -398,6 +398,7 @@ def fetch_html_from_url(url: str) -> str:
             "-H", f"User-Agent: {BROWSER_HEADERS['User-Agent']}",
             "-H", f"Accept: {BROWSER_HEADERS['Accept']}",
             "-H", f"Accept-Language: {BROWSER_HEADERS['Accept-Language']}",
+            "--",
             url
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14)

@@ -166,12 +166,28 @@ async function uploadImageFile(file) {
 }
 
 /**
+ * Convert Date object to local YYYY-MM-DD string without UTC timezone shift.
+ */
+function formatLocalDate(d = new Date()) {
+  const dateObj = (d instanceof Date && !isNaN(d.getTime())) ? d : new Date();
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const day = String(dateObj.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
  * Format timestamp into human-readable relative time (e.g., 'just now', '5m ago', '2h ago', '3d ago').
  */
 function formatTimeAgo(timestamp) {
   if (!timestamp) return "";
   try {
-    const date = new Date(timestamp.endsWith("Z") ? timestamp : timestamp.replace(" ", "T") + "Z");
+    let clean = String(timestamp).trim();
+    if (!clean.includes("Z") && !clean.includes("+") && !/-\d\d:\d\d$/.test(clean)) {
+      clean = clean.replace(" ", "T") + "Z";
+    }
+    const date = new Date(clean);
+    if (isNaN(date.getTime())) return timestamp;
     const now = new Date();
     const diffSeconds = Math.max(0, Math.floor((now - date) / 1000));
 
@@ -188,6 +204,14 @@ function formatTimeAgo(timestamp) {
   } catch (e) {
     return timestamp;
   }
+}
+
+/**
+ * Alias for formatTimeAgo with fallback to "recently".
+ */
+function formatRelativeTime(dateStr) {
+  const res = formatTimeAgo(dateStr);
+  return res || "recently";
 }
 
 

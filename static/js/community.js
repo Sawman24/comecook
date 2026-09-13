@@ -624,7 +624,7 @@ async function deleteComment(commentId) {
    CREATE POST MODAL & POLL CREATOR
    ============================================================================== */
 
-function openCreateModal(defaultType = "post", defaultStationId = null, enablePoll = false) {
+function openCreateModal(defaultType = "post", defaultStationId = null, enablePoll = false, initialContent = "") {
   if (!currentUser) {
     openAuthModal("login");
     return;
@@ -634,8 +634,8 @@ function openCreateModal(defaultType = "post", defaultStationId = null, enablePo
   if (!modal) return;
 
   postUploadedImageUrl = "";
-  document.getElementById("post-type-select").value = defaultType;
-  document.getElementById("post-content-input").value = "";
+  document.getElementById("post-type-select").value = defaultType || "post";
+  document.getElementById("post-content-input").value = initialContent || "";
   document.getElementById("post-image-file").value = "";
   document.getElementById("post-image-preview-wrap").style.display = "none";
   document.getElementById("post-image-preview").src = "";
@@ -936,13 +936,25 @@ async function handleReportSubmit(e) {
 }
 
 function formatRelativeTime(dateStr) {
+  if (typeof formatTimeAgo === "function") {
+    const res = formatTimeAgo(dateStr);
+    return res || "recently";
+  }
   if (!dateStr) return "recently";
-  const date = new Date(dateStr.replace(" ", "T") + "Z");
-  const now = new Date();
-  const diffSec = Math.floor((now - date) / 1000);
-
-  if (diffSec < 60) return "just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
+  try {
+    let clean = String(dateStr).trim();
+    if (!clean.includes("Z") && !clean.includes("+") && !/-\d\d:\d\d$/.test(clean)) {
+      clean = clean.replace(" ", "T") + "Z";
+    }
+    const date = new Date(clean);
+    if (isNaN(date.getTime())) return "recently";
+    const now = new Date();
+    const diffSec = Math.max(0, Math.floor((now - date) / 1000));
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    return `${Math.floor(diffSec / 86400)}d ago`;
+  } catch (e) {
+    return "recently";
+  }
 }

@@ -4,6 +4,7 @@ Supports standard SMTP (Gmail, Google Workspace, Brevo, SendGrid, Amazon SES, Ma
 """
 
 import os
+import html
 import smtplib
 import threading
 import logging
@@ -244,13 +245,14 @@ def get_base_html_template(title: str, preheader: str, content_html: str, base_u
 
 def send_password_reset_email(to_email: str, username: str, reset_token: str, base_url: str = "https://comecook.app"):
     """Generate and dispatch password reset email."""
+    safe_user = html.escape(username or "Chef")
     reset_url = f"{base_url}/#/reset-password?token={reset_token}"
     subject = "Reset Your Cooked Password"
     preheader = f"Use this link to reset your Cooked account password (expires in 1 hour)."
 
     content_html = f"""
       <h2 style="margin-top: 0; color: #0f172a; font-size: 20px; font-weight: 700;">Password Reset Request</h2>
-      <p>Hello <strong>@{username}</strong>,</p>
+      <p>Hello <strong>@{safe_user}</strong>,</p>
       <p>We received a request to reset the password for your Cooked account. Click the button below to set a new password:</p>
       
       <div style="text-align: center; margin: 28px 0;">
@@ -286,12 +288,14 @@ If you did not make this request, you can safely ignore this email.
 
 def send_welcome_email(to_email: str, username: str, display_name: str, base_url: str = "https://comecook.app"):
     """Generate and dispatch welcome email on registration."""
+    safe_user = html.escape(username or "Chef")
+    safe_display = html.escape(display_name or username or "Chef")
     subject = "Welcome to the Cooked Kitchen! 👨‍🍳"
-    preheader = f"Welcome to Cooked, Chef {display_name}! Start exploring recipes and sharing your culinary craft."
+    preheader = f"Welcome to Cooked, Chef {safe_display}! Start exploring recipes and sharing your culinary craft."
 
     content_html = f"""
-      <h2 style="margin-top: 0; color: #0f172a; font-size: 20px; font-weight: 700;">Welcome to Cooked, Chef {display_name}! 👨‍🍳</h2>
-      <p>Your account (<strong>@{username}</strong>) is ready to cook.</p>
+      <h2 style="margin-top: 0; color: #0f172a; font-size: 20px; font-weight: 700;">Welcome to Cooked, Chef {safe_display}! 👨‍🍳</h2>
+      <p>Your account (<strong>@{safe_user}</strong>) is ready to cook.</p>
       <p>Here are a few great ways to get started:</p>
       
       <ul style="padding-left: 20px; line-height: 1.8; color: #334155;">
@@ -325,12 +329,13 @@ Start cooking now: {base_url}
 
 def send_password_changed_email(to_email: str, username: str, base_url: str = "https://comecook.app"):
     """Security notification sent when a password is changed."""
+    safe_user = html.escape(username or "Chef")
     subject = "Your Cooked Password Has Been Changed"
-    preheader = f"Security Alert: The password for your Cooked account @{username} was recently updated."
+    preheader = f"Security Alert: The password for your Cooked account @{safe_user} was recently updated."
 
     content_html = f"""
       <h2 style="margin-top: 0; color: #0f172a; font-size: 20px; font-weight: 700;">Security Alert: Password Updated</h2>
-      <p>Hello <strong>@{username}</strong>,</p>
+      <p>Hello <strong>@{safe_user}</strong>,</p>
       <p>The password for your Cooked account was successfully changed on {datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")}.</p>
       <p>All previous active sessions have been signed out for security.</p>
       <p style="color: #64748b; font-size: 13px;">If you made this change, no further action is required.</p>
