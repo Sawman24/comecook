@@ -940,20 +940,19 @@ def register():
 @app.route("/api/auth/login", methods=["POST"])
 def login():
     ip = request.remote_addr or "127.0.0.1"
-
-    # Security Mitigation: Rate-Limiting & Brute Force Lockout
-    if is_ip_rate_limited(ip):
-        return jsonify({
-            "error": "Rate Limited",
-            "message": "Too many failed login attempts. Please try again after 5 minutes."
-        }), 429
-
     data = request.get_json() or {}
     username_or_email = (data.get("username") or "").strip()
     password = data.get("password") or ""
 
     if not username_or_email or not password:
         return jsonify({"error": "Validation Error", "message": "Username/email and password required"}), 400
+
+    # Security Mitigation: Rate-Limiting & Brute Force Lockout (per-IP-per-username)
+    if is_ip_rate_limited(ip, username_or_email):
+        return jsonify({
+            "error": "Rate Limited",
+            "message": "Too many failed login attempts. Please try again after 5 minutes."
+        }), 429
 
     conn = get_db_connection()
     cursor = conn.cursor()

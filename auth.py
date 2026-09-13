@@ -11,8 +11,6 @@ from database import get_db_connection
 
 SESSION_COOKIE_NAME = "cooked_session"
 SESSION_DURATION_DAYS = 14
-MAX_FAILED_ATTEMPTS = 5
-LOCKOUT_WINDOW_MINUTES = 5
 
 ADMIN_USERNAMES = [
     u.strip().lower() for u in os.environ.get("ADMIN_USERNAMES", "headchef,admin,sawyer").split(",") if u.strip()
@@ -22,10 +20,6 @@ ADMIN_USERNAMES = [
 _SESSION_CACHE = {} # token -> (user_dict, expire_timestamp)
 _SESSION_CACHE_LOCK = threading.Lock()
 _SESSION_CACHE_TTL = 30.0
-
-# Thread-safe in-memory IP rate limiter (zero disk write locks)
-_FAILED_LOGINS = {} # ip -> deque of timestamp floats
-_LOGIN_LOCK = threading.Lock()
 
 import re
 
@@ -77,14 +71,33 @@ def generate_session_token() -> str:
     """Generate 256-bit cryptographically secure pseudorandom token."""
     return secrets.token_urlsafe(32)
 
-def is_ip_rate_limited(ip_address: str, conn=None) -> bool:
-    """Check if the IP has exceeded 5 failed login attempts in the last 5 minutes (in-memory)."""
+# Thread-safe in-memory brute-force rate limiter: keyed by (ip, username) pair
+# This prevents a single IP running many legitimate accounts from self-blocking.
+_FAILED_LOGINS: dict[tuple, deque] = {}  # (ip, normalized_username) -> deque of timestamps
+_LOGIN_LOCK = threading.Lock()
+
+MAX_FAILED_ATTEMPTS = 10       # attempts per (ip, username) pair before lockout
+LOCKOUT_WINDOW_MINUTES = 5     # sliding window length in minutes
+
+def is_ip_rate_limited(ip_address: str, username: str = "", conn=None) -> bool:
+    """
+    Check if this (IP, username) pair has exceeded MAX_FAILED_ATTEMPTS within
+    the LOCKOUT_WINDOW_MINUTES sliding window.
+
+    Keying by both IP and username means 300 users from the same machine each
+    get their own independent counter — a stress-test runner can authenticate
+    hundreds of unique accounts without triggering a server-wide IP lockout.
+
+    The env-var override (DISABLE_RATE_LIMIT=1 or COOKED_ENV=test) disables all
+    rate limiting, which is useful for LAN / staging load-test environments.
+    """
     if os.environ.get("COOKED_ENV") in ("test", "development") or os.environ.get("DISABLE_RATE_LIMIT") == "1":
         return False
     now = time.time()
     cutoff = now - (LOCKOUT_WINDOW_MINUTES * 60)
+    key = (ip_address, (username or "").lower().strip())
     with _LOGIN_LOCK:
-        attempts = _FAILED_LOGINS.get(ip_address)
+        attempts = _FAILED_LOGINS.get(key)
         if not attempts:
             return False
         while attempts and attempts[0] < cutoff:
@@ -94,13 +107,14 @@ def is_ip_rate_limited(ip_address: str, conn=None) -> bool:
 def record_login_attempt(ip_address: str, username: str, success: bool, conn=None):
     """Log a login attempt in-memory for instant, non-blocking rate limiting."""
     now = time.time()
+    key = (ip_address, (username or "").lower().strip())
     with _LOGIN_LOCK:
         if success:
-            _FAILED_LOGINS.pop(ip_address, None)
+            _FAILED_LOGINS.pop(key, None)
         else:
-            if ip_address not in _FAILED_LOGINS:
-                _FAILED_LOGINS[ip_address] = deque()
-            _FAILED_LOGINS[ip_address].append(now)
+            if key not in _FAILED_LOGINS:
+                _FAILED_LOGINS[key] = deque()
+            _FAILED_LOGINS[key].append(now)
 
 def create_user_session(user_id: int) -> str:
     """Generate and store a session token in the database."""

@@ -36,6 +36,8 @@ services:
       - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Cooked}
       - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}
       - EMAIL_FROM=${EMAIL_FROM:-}
+      # Disable brute-force IP rate limiting — set to 1 in .env on LAN/stress test environments
+      - DISABLE_RATE_LIMIT=${DISABLE_RATE_LIMIT:-0}
     volumes:
       - cooked-data:/app/data
       - cooked-uploads:/app/uploads

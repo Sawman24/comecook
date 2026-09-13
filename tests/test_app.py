@@ -212,19 +212,28 @@ class CookedTestCase(unittest.TestCase):
         self.assertTrue(len(get_res.get_json()["planner"]) > 0)
 
     def test_08_login_rate_limiting_lockout(self):
-        """Verify 5 failed login attempts trigger 429 lockout."""
-        for _ in range(5):
+        """Verify exceeding MAX_FAILED_ATTEMPTS (10) per (IP, username) triggers 429 lockout."""
+        target_username = "brute_force_target_chef"
+        for _ in range(10):
             self.client.post("/api/auth/login", json={
-                "username": "nonexistent_chef",
+                "username": target_username,
                 "password": "WrongPassword123!"
             })
 
-        # 6th attempt should return 429 Too Many Requests
+        # 11th attempt on the same username/IP pair should return 429
         lockout_res = self.client.post("/api/auth/login", json={
-            "username": "headchef",
-            "password": "ChefPass123!"
+            "username": target_username,
+            "password": "WrongPassword123!"
         })
-        self.assertEqual(lockout_res.status_code, 429, "5 failed logins must trigger progressive rate-limit lockout")
+        self.assertEqual(lockout_res.status_code, 429, "10 failed logins on the same account must trigger rate-limit lockout")
+
+        # A *different* username from the same IP must NOT be locked out
+        other_res = self.client.post("/api/auth/login", json={
+            "username": "completely_different_user",
+            "password": "WrongPassword123!"
+        })
+        self.assertNotEqual(other_res.status_code, 429, "Different username must have its own independent counter")
+
         from auth import reset_auth_caches
         reset_auth_caches()
 
