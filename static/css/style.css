@@ -4124,3 +4124,89 @@ textarea.form-control {
   box-shadow: var(--shadow-sm);
 }
 
+
+/* ==============================================================================
+   DANGER ZONE — Profile Modal Section
+   ============================================================================== */
+
+.danger-zone-section {
+  margin: 0;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.danger-zone-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.danger-zone-icon {
+  font-size: 0.9rem;
+}
+
+.danger-zone-title {
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #ef4444;
+}
+
+.danger-zone-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem;
+  line-height: 1.4;
+}
+
+.danger-zone-btn {
+  font-size: 0.8rem;
+}
+
+/* ==============================================================================
+   DELETE ACCOUNT MODAL
+   ============================================================================== */
+
+.modal-dialog-sm {
+  max-width: 480px;
+}
+
+.modal-header-danger {
+  background: rgba(239, 68, 68, 0.07);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.modal-header-danger h3 {
+  color: #ef4444;
+}
+
+.delete-account-warning {
+  background: rgba(239, 68, 68, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.1rem;
+}
+
+.delete-account-warning-title {
+  font-size: 0.92rem;
+  color: var(--text-main);
+  margin: 0 0 0.6rem;
+}
+
+.delete-account-warning-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.delete-account-error {
+  font-size: 0.82rem;
+  color: #ef4444;
+  margin: 0.4rem 0 0;
+  font-weight: 600;
+}

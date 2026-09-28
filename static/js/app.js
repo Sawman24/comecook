@@ -753,6 +753,61 @@ async function handleProfileUpdateSubmit(e) {
 }
 
 
+/* ==============================================================================
+   ACCOUNT DELETION
+   ============================================================================== */
+
+function openDeleteAccountModal() {
+  const modal = document.getElementById("delete-account-modal");
+  if (!modal) return;
+  // Reset state
+  const pwInput = document.getElementById("delete-account-password");
+  const errEl = document.getElementById("delete-account-error");
+  const submitBtn = document.getElementById("delete-account-submit-btn");
+  if (pwInput) pwInput.value = "";
+  if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+  if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Permanently Delete"; }
+  modal.classList.add("active");
+}
+
+function closeDeleteAccountModal() {
+  const modal = document.getElementById("delete-account-modal");
+  if (modal) modal.classList.remove("active");
+}
+
+async function handleDeleteAccountSubmit(e) {
+  e.preventDefault();
+  const password = (document.getElementById("delete-account-password")?.value || "").trim();
+  const errEl = document.getElementById("delete-account-error");
+  const submitBtn = document.getElementById("delete-account-submit-btn");
+
+  if (!password) {
+    if (errEl) { errEl.textContent = "Please enter your password."; errEl.style.display = "block"; }
+    return;
+  }
+
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Deleting..."; }
+  if (errEl) { errEl.style.display = "none"; errEl.textContent = ""; }
+
+  try {
+    await apiRequest("/api/users/account", {
+      method: "DELETE",
+      body: JSON.stringify({ password })
+    });
+    // Account gone — clear local state and reload to landing
+    currentUser = null;
+    closeDeleteAccountModal();
+    showToast("Your account has been permanently deleted. Goodbye!", "info", 3000);
+    setTimeout(() => { window.location.href = "/"; }, 2000);
+  } catch (err) {
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Permanently Delete"; }
+    if (errEl) {
+      errEl.textContent = err.message || "Incorrect password. Please try again.";
+      errEl.style.display = "block";
+    }
+  }
+}
+
 
 async function adminRemoveUserFromProfile(userId, username) {
   if (!confirm(`Are you sure you want to PERMANENTLY REMOVE @${username}?\n\nThis will immediately delete their account, profile, recipes, posts, and comments.`)) {

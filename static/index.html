@@ -680,6 +680,19 @@
             </div>
           </div>
         </div>
+
+        <!-- Danger Zone -->
+        <div class="danger-zone-section">
+          <div class="danger-zone-header">
+            <span class="danger-zone-icon">⚠️</span>
+            <span class="danger-zone-title">Danger Zone</span>
+          </div>
+          <p class="danger-zone-desc">Once you delete your account, all your recipes, posts, comments, and data are permanently removed. This cannot be undone.</p>
+          <button type="button" class="btn btn-danger btn-sm danger-zone-btn" onclick="closeEditProfileModal(); openDeleteAccountModal();">
+            🗑️ Delete My Account
+          </button>
+        </div>
+
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="closeEditProfileModal()">Cancel</button>
           <button type="submit" class="btn btn-primary" id="profile-save-btn">Update Profile</button>
@@ -688,7 +701,40 @@
     </div>
   </div>
 
+  <!-- 7a. DELETE ACCOUNT CONFIRMATION MODAL -->
+  <div class="modal-backdrop" id="delete-account-modal">
+    <div class="modal-dialog modal-dialog-sm">
+      <div class="modal-header modal-header-danger">
+        <h3>🗑️ Delete Account</h3>
+        <button class="btn-icon" onclick="closeDeleteAccountModal()">✕</button>
+      </div>
+      <form onsubmit="handleDeleteAccountSubmit(event)">
+        <div class="modal-body">
+          <div class="delete-account-warning">
+            <p class="delete-account-warning-title">This action is <strong>permanent and irreversible.</strong></p>
+            <ul class="delete-account-warning-list">
+              <li>All your recipes will be permanently deleted</li>
+              <li>All your posts and comments will be removed</li>
+              <li>Your profile, followers, and messages will be gone</li>
+              <li>You will not be able to recover this account</li>
+            </ul>
+          </div>
+          <div class="form-group" style="margin-top: 1.25rem;">
+            <label for="delete-account-password" style="font-weight: 600;">Enter your password to confirm</label>
+            <input type="password" id="delete-account-password" class="form-control" placeholder="Your current password" autocomplete="current-password" required />
+            <p id="delete-account-error" class="delete-account-error" style="display: none;"></p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeDeleteAccountModal()">Cancel, Keep My Account</button>
+          <button type="submit" class="btn btn-danger" id="delete-account-submit-btn">Permanently Delete</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- 7. REPORT MODAL -->
+
   <div class="modal-backdrop" id="report-modal">
     <div class="modal-dialog">
       <div class="modal-header">

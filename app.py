@@ -381,6 +381,19 @@ def compute_user_badges(user_id: int, conn=None) -> list:
                 "tier": "gold"
             })
 
+        # Early Adopter: awarded to the first 200 users by registration order (ID ascending)
+        cursor.execute("SELECT id FROM users ORDER BY id ASC LIMIT 200;")
+        early_rows = cursor.fetchall()
+        early_threshold_id = early_rows[-1]["id"] if len(early_rows) >= 200 else None
+        if early_threshold_id is None or u["id"] <= early_threshold_id:
+            badges.append({
+                "id": "early_adopter",
+                "name": "Early Adopter",
+                "icon": "🌱",
+                "description": "Founding member — one of the first 200 chefs on Cooked",
+                "tier": "gold"
+            })
+
         # Recipes count & stats
         cursor.execute("SELECT COUNT(*) AS count FROM recipes WHERE user_id = ? AND is_public = 1;", (user_id,))
         rec_count = cursor.fetchone()["count"]
@@ -1278,6 +1291,46 @@ def update_profile():
     conn.close()
 
     return jsonify({"success": True, "message": "Profile updated successfully"})
+
+
+@app.route("/api/users/account", methods=["DELETE"])
+@require_auth
+def delete_own_account():
+    """Permanently delete the authenticated user's account after password re-verification."""
+    data = request.get_json() or {}
+    password = data.get("password") or ""
+
+    if not password:
+        return jsonify({"error": "Validation Error", "message": "Password is required to delete your account"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Re-fetch the user's current password hash to verify identity
+    cursor.execute("SELECT id, password_hash FROM users WHERE id = ? AND is_active = 1;", (g.current_user["id"],))
+    user_row = cursor.fetchone()
+    if not user_row:
+        conn.close()
+        return jsonify({"error": "Not Found", "message": "Account not found"}), 404
+
+    if not verify_password(password, user_row["password_hash"]):
+        conn.close()
+        return jsonify({"error": "Unauthorized", "message": "Incorrect password. Account deletion cancelled."}), 401
+
+    # Permanently delete the account; all related data cascades via ON DELETE CASCADE
+    cursor.execute("DELETE FROM users WHERE id = ?;", (g.current_user["id"],))
+    conn.commit()
+    conn.close()
+
+    # Invalidate badge cache for this user
+    with _BADGE_CACHE_LOCK:
+        _BADGE_CACHE.pop(g.current_user["id"], None)
+
+    # Log the user out by clearing the session cookie
+    response = make_response(jsonify({"success": True, "message": "Account permanently deleted"}))
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
 
 @app.route("/api/users/<int:target_user_id>/follow", methods=["POST", "DELETE"])
 @require_auth

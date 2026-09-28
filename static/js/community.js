@@ -37,10 +37,10 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
     <div class="hub-control-bar">
       <div class="segmented-control">
         <button class="segmented-btn ${filter === 'all' ? 'active' : ''}" onclick="loadCommunityFeedView('all', '${dietary}')">
-          <span>🔥</span> All Logs
+          <span>✨</span> For You
         </button>
         <button class="segmented-btn ${filter === 'question' ? 'active' : ''}" onclick="loadCommunityFeedView('question', '${dietary}')">
-          <span>❓</span> Q&A & Advice
+          <span>❓</span> Q&A
         </button>
         <button class="segmented-btn ${filter === 'showcase' ? 'active' : ''}" onclick="loadCommunityFeedView('showcase', '${dietary}')">
           <span>📸</span> Showcases
@@ -51,8 +51,8 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
       </div>
 
       <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <button class="filter-toggle-btn ${hasDietFilter ? 'has-filters' : ''}" onclick="toggleDietaryFilterDrawer()">
-          <span>🥗</span> ${dietary ? capitalize(dietary) : 'Dietary Filters'}
+        <button class="filter-toggle-btn ${hasDietFilter ? 'has-filters' : ''}" onclick="toggleDietaryFilterDrawer()" title="${dietary ? capitalize(dietary) + ' filter active' : 'Dietary Filters'}">
+          🥗 ${dietary ? capitalize(dietary) : 'Diet'}
           <span style="font-size: 0.75rem;">▾</span>
         </button>
       </div>
@@ -78,16 +78,14 @@ async function loadCommunityFeedView(filter = "all", dietary = "") {
     <div class="create-post-card" style="margin-bottom: 1.25rem;">
       <div class="create-post-header">
         <img src="${escapeHtml(currentUser?.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100')}" class="avatar-sm" />
-        <input type="text" class="form-control" style="border-radius: var(--radius-full); cursor: pointer;" placeholder="Log a dish you cooked, share a culinary technique, or ask advice..." onclick="openCreateModal()" readonly />
+        <input type="text" class="form-control" style="border-radius: var(--radius-full); cursor: pointer;" placeholder="Share a dish, technique, or ask the community..." onclick="openCreateModal()" readonly />
       </div>
       <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem; border-top: 1px solid var(--border-subtle);">
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <div style="display: flex; gap: 0.5rem;">
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('showcase')">📸 Photo</button>
           <button class="btn btn-secondary btn-sm" onclick="openCreateModal('question')">❓ Ask Advice</button>
-          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post', null, true)">📊 Poll</button>
-          <button class="btn btn-secondary btn-sm" onclick="openCreateModal('post')">🍲 Attach Recipe</button>
         </div>
-        <button class="btn btn-primary btn-sm" onclick="openCreateModal()">Post</button>
+        <button class="btn btn-primary btn-sm" onclick="openCreateModal()">+ Post</button>
       </div>
     </div>
 
